@@ -141,6 +141,7 @@ class EvolutionSampleTests(unittest.TestCase):
                         },
                         "messageType": "audioMessage",
                         "messageTimestamp": 1787071507,
+                        "pushName": "Christian",
                     },
                     "server_url": "https://wa.orgasmic.live",
                     "sender": "14087093943@s.whatsapp.net",
@@ -162,6 +163,8 @@ class EvolutionSampleTests(unittest.TestCase):
         self.assertNotIn("mmg.whatsapp.net", parsed["text"])
         self.assertTrue(needs_media_upload(parsed["type"]))
         self.assertIsNone(parsed["media_url"])
+        self.assertEqual(parsed["duration_seconds"], 8)
+        self.assertEqual(parsed["from_name"], "Christian")
 
     def test_incoming_gif_video_message(self):
         payload = {
@@ -310,6 +313,10 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("normalizeForEvolution", js)
         self.assertIn("gifPlayback", js)
         self.assertIn("jpegThumbnail", js)
+        self.assertIn("activity/call", js)
+        self.assertIn("WhatsApp Voice beantworten", js)
+        self.assertIn("recording_url", js)
+        self.assertIn("last_outbound_activity", js)
 
 
 if __name__ == "__main__":

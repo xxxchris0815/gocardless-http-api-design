@@ -1,6 +1,9 @@
 # WhatsApp → Close Activity (n8n)
 
-Nur **Evolution API**. Webhooks `send.message` und `messages.upsert` werden zu Close WhatsApp-Activities. Incoming-Nachrichten erzeugen optional die Task „WhatsApp beantworten“.
+Nur **Evolution API**. Webhooks `send.message` und `messages.upsert` werden zu Close-Aktivitäten. Incoming-Nachrichten erzeugen optional eine Task.
+
+- Text, Bild, Video, GIF, Dokument, Sticker → WhatsApp-Activity (Medien als Anhang)
+- Sprachnachricht (`ptt`) → **Call-Activity** wie im Zapier-Script (`recording_url`, Dauer, Task „WhatsApp Voice beantworten“, keine doppelte offene Task)
 
 ```json
 {
@@ -43,9 +46,10 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 ## Logik
 
 - Telefonvarianten: `49160…`, `+49160…`, `160…`, `0160…`
-- Incoming: zuständiger User zuerst aus dem Custom Field, sonst WA-/Call-History
+- Incoming: zuständiger User zuerst aus dem Custom Field, sonst letzte **Outbound**-Activity, sonst WA-/Call-History
 - Outgoing: Close-User aus `/me/`
-- Bilder, Voice Notes, Audio, Video, Dokumente, Sticker: Evolution `POST /chat/getBase64FromMediaMessage/{instance}`, dann Close Files-API, dann Activity-`attachments`. `server_url` und `apikey` aus dem Webhook reichen; Config nur als Override
+- Bilder, Video, GIF, Dokument, Sticker: Evolution `getBase64FromMediaMessage` → Close Files → WhatsApp-`attachments`
+- Voice: dieselbe Datei als Close-Call `recording_url` (Zapier-Verhalten). `server_url` und `apikey` aus dem Webhook reichen
 - WhatsApp-CDN-URLs (`mmg.whatsapp.net`) werden nicht als Markdown verlinkt
 - Duplikate: gleiche `wamid` → skip (vor dem Media-Download)
 

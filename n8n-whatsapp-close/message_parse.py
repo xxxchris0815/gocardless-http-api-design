@@ -223,6 +223,13 @@ def parse_evolution_message(payload: dict, default_local_phone: str) -> Optional
     sender_phone = clean_phone(sender.split("@")[0] if "@" in sender else sender)
     local_phone = sender_phone or clean_phone(default_local_phone)
     ts = data.get("messageTimestamp") or data.get("messageTimestamp")
+    duration = 0
+    if kind in ("voice", "audio"):
+        aud = inner.get("audioMessage") or {}
+        try:
+            duration = int(float(aud.get("seconds") or 0))
+        except (TypeError, ValueError):
+            duration = 0
     return {
         "id": msg_id,
         "is_incoming": not from_me,
@@ -235,6 +242,8 @@ def parse_evolution_message(payload: dict, default_local_phone: str) -> Optional
         "instance": payload.get("instance"),
         "event": event,
         "server_url": payload.get("server_url") or "",
+        "from_name": data.get("pushName") or "",
+        "duration_seconds": duration,
     }
 
 

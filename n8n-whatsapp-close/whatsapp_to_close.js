@@ -285,6 +285,12 @@ function buildMultipart(fields, filename, contentType, buffer) {
   };
 }
 
+function escapeHtml(value) {
+  return String(value || "").replace(/[&<>"']/g, (ch) => {
+    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch];
+  });
+}
+
 function isGroupOrBroadcast(jid) {
   const s = String(jid || "").toLowerCase();
   return SKIP_JID_MARKERS.some((m) => s.includes(m));
@@ -496,6 +502,11 @@ function parseEvolution(payload, defaultLocalPhone) {
     mimetype: mimetype || "",
     filename: filename || "",
     server_url: payload.server_url || "",
+    from_name: data.pushName || "",
+    duration_seconds:
+      inner.audioMessage && Number.isFinite(Number(inner.audioMessage.seconds))
+        ? Math.round(Number(inner.audioMessage.seconds))
+        : 0,
     raw_key: key,
     raw_message: data.message || {},
   };
@@ -865,6 +876,53 @@ async function main() {
     return null;
   }
 
+  async function findResponsibleUserFromOutbound(leadId) {
+    try {
+      const res = await httpJson("GET", "https://api.close.com/api/v1/activity/", {
+        headers: closeHeaders,
+        qs: {
+          lead_id: leadId,
+          _limit: 50,
+          _order_by: "-date_created",
+          _fields: "id,_type,direction,created_by,user_id,created_by_name,user_name,date_created",
+        },
+      });
+      if (res.status !== 200 || !res.data || !Array.isArray(res.data.data)) return null;
+      const outbound = ["outbound", "outgoing", "sent"];
+      for (const act of res.data.data) {
+        const userId = act.created_by || act.user_id;
+        if (!userId || (excludedUserId && userId === excludedUserId)) continue;
+        const dir = String(act.direction || "").toLowerCase();
+        if (outbound.includes(dir)) {
+          return { userId, source: "last_outbound_activity", matchId: act.id };
+        }
+      }
+      for (const act of res.data.data) {
+        const userId = act.created_by || act.user_id;
+        if (!userId || (excludedUserId && userId === excludedUserId)) continue;
+        return { userId, source: "most_recent_activity", matchId: act.id };
+      }
+    } catch (e) {
+      log(`Outbound History Error: ${e.message || e}`);
+    }
+    return null;
+  }
+
+  async function findOpenTask(leadId, assignedTo, text) {
+    const res = await httpJson("GET", "https://api.close.com/api/v1/task/", {
+      headers: closeHeaders,
+      qs: {
+        lead_id: leadId,
+        assigned_to: assignedTo,
+        is_complete: false,
+        _limit: 20,
+      },
+    });
+    if (res.status !== 200 || !res.data || !Array.isArray(res.data.data)) return null;
+    const want = String(text || "").trim();
+    return res.data.data.find((t) => String(t.text || "").trim() === want) || null;
+  }
+
   async function findResponsibleUserFromHistory(leadId) {
     try {
       const wa = await httpJson("GET", "https://api.close.com/api/v1/activity/whatsapp_message/", {
@@ -949,7 +1007,8 @@ async function main() {
       responsibleUserId = cfUser;
       log(`Step 5: User via Custom Field (${responsibleUserId})`);
     } else {
-      const hist = await findResponsibleUserFromHistory(leadId);
+      const outbound = await findResponsibleUserFromOutbound(leadId);
+      const hist = outbound || (await findResponsibleUserFromHistory(leadId));
       if (hist) {
         responsibleUserId = hist.userId;
         log(`Step 5: User via ${hist.source} (${responsibleUserId})`);
@@ -960,20 +1019,47 @@ async function main() {
   }
 
   const activityAt = isoFromTimestamp(parsed.timestamp, payload.date_time);
+  const isVoice = parsed.type === "voice";
+  const taskText = isVoice ? "WhatsApp Voice beantworten" : "WhatsApp beantworten";
 
-  const checkRes = await httpJson("GET", "https://api.close.com/api/v1/activity/whatsapp_message/", {
-    headers: closeHeaders,
-    qs: { external_whatsapp_message_id: parsed.id },
-  });
-  if (checkRes.data && checkRes.data.data && checkRes.data.data.length) {
-    const duplicateId = checkRes.data.data[0].id;
-    log(`Step 6: Duplicate ${duplicateId}`);
-    return result({
-      success: true,
-      lead_id: leadId,
-      action: "skipped_duplicate",
-      duplicate_activity_id: duplicateId,
+  if (isVoice) {
+    const recentCalls = await httpJson("GET", "https://api.close.com/api/v1/activity/call/", {
+      headers: closeHeaders,
+      qs: {
+        lead_id: leadId,
+        _limit: 20,
+        _order_by: "-date_created",
+        _fields: "id,note,note_html",
+      },
     });
+    const callDup = ((recentCalls.data && recentCalls.data.data) || []).find((c) =>
+      String((c && (c.note_html || c.note)) || "").includes(parsed.id)
+    );
+    if (callDup) {
+      log(`Step 6: Duplicate Call ${callDup.id}`);
+      return result({
+        success: true,
+        lead_id: leadId,
+        action: "skipped_duplicate",
+        duplicate_activity_id: callDup.id,
+        activity_type: "call",
+      });
+    }
+  } else {
+    const checkRes = await httpJson("GET", "https://api.close.com/api/v1/activity/whatsapp_message/", {
+      headers: closeHeaders,
+      qs: { external_whatsapp_message_id: parsed.id },
+    });
+    if (checkRes.data && checkRes.data.data && checkRes.data.data.length) {
+      const duplicateId = checkRes.data.data[0].id;
+      log(`Step 6: Duplicate ${duplicateId}`);
+      return result({
+        success: true,
+        lead_id: leadId,
+        action: "skipped_duplicate",
+        duplicate_activity_id: duplicateId,
+      });
+    }
   }
 
   let attachments = [];
@@ -1025,55 +1111,97 @@ async function main() {
     }
   }
 
-  const activityData = {
-    organization_id: lead.organization_id,
-    lead_id: leadId,
-    contact_id: contactId,
-    status: parsed.is_incoming ? "received" : "sent",
-    direction: parsed.is_incoming ? "incoming" : "outgoing",
-    activity_at: activityAt,
-    local_phone: `+${parsed.local_phone}`,
-    remote_phone: `+${parsed.remote_phone}`,
-    message_markdown: parsed.text,
-    external_whatsapp_message_id: parsed.id,
-  };
-  if (attachments.length) activityData.attachments = attachments;
-  if (parsed.is_incoming && responsibleUserId) activityData.user_id = responsibleUserId;
-  else if (!parsed.is_incoming && currentUserId) activityData.user_id = currentUserId;
-
-  const createUrl = parsed.is_incoming
-    ? "https://api.close.com/api/v1/activity/whatsapp_message/?send_to_inbox=true"
-    : "https://api.close.com/api/v1/activity/whatsapp_message/";
-  const createRes = await httpJson("POST", createUrl, { headers: closeHeadersJson, body: activityData });
-  if (createRes.status < 200 || createRes.status >= 300) {
-    return result({
-      success: false,
+  let newActivity = {};
+  let activityType = "whatsapp_message";
+  if (isVoice) {
+    const fromName = parsed.from_name || "WhatsApp";
+    const callData = {
       lead_id: leadId,
-      error: "Creation failed",
-      details: createRes.data,
-      http_status: createRes.status,
+      contact_id: contactId,
+      direction: parsed.is_incoming ? "inbound" : "outbound",
+      status: "completed",
+      duration: parsed.duration_seconds || 0,
+      phone: `+${parsed.remote_phone}`,
+      note_html: `<body><p>WhatsApp Sprachnachricht von ${escapeHtml(fromName)} ${
+        parsed.is_incoming ? "empfangen" : "gesendet"
+      }</p><p>wa:${escapeHtml(parsed.id)}</p></body>`,
+    };
+    if (attachments[0] && attachments[0].url) callData.recording_url = attachments[0].url;
+    if (parsed.is_incoming && responsibleUserId) callData.user_id = responsibleUserId;
+    else if (!parsed.is_incoming && currentUserId) callData.user_id = currentUserId;
+
+    const createRes = await httpJson("POST", "https://api.close.com/api/v1/activity/call/", {
+      headers: closeHeadersJson,
+      body: callData,
     });
+    if (createRes.status < 200 || createRes.status >= 300) {
+      return result({
+        success: false,
+        lead_id: leadId,
+        error: "Call creation failed",
+        details: createRes.data,
+        http_status: createRes.status,
+      });
+    }
+    newActivity = createRes.data || {};
+    activityType = "call";
+    log("Step 8: Call Activity Created");
+  } else {
+    const activityData = {
+      organization_id: lead.organization_id,
+      lead_id: leadId,
+      contact_id: contactId,
+      status: parsed.is_incoming ? "received" : "sent",
+      direction: parsed.is_incoming ? "incoming" : "outgoing",
+      activity_at: activityAt,
+      local_phone: `+${parsed.local_phone}`,
+      remote_phone: `+${parsed.remote_phone}`,
+      message_markdown: parsed.text,
+      external_whatsapp_message_id: parsed.id,
+    };
+    if (attachments.length) activityData.attachments = attachments;
+    if (parsed.is_incoming && responsibleUserId) activityData.user_id = responsibleUserId;
+    else if (!parsed.is_incoming && currentUserId) activityData.user_id = currentUserId;
+
+    const createUrl = parsed.is_incoming
+      ? "https://api.close.com/api/v1/activity/whatsapp_message/?send_to_inbox=true"
+      : "https://api.close.com/api/v1/activity/whatsapp_message/";
+    const createRes = await httpJson("POST", createUrl, { headers: closeHeadersJson, body: activityData });
+    if (createRes.status < 200 || createRes.status >= 300) {
+      return result({
+        success: false,
+        lead_id: leadId,
+        error: "Creation failed",
+        details: createRes.data,
+        http_status: createRes.status,
+      });
+    }
+    newActivity = createRes.data || {};
+    log("Step 8: Activity Created");
   }
-  const newActivity = createRes.data || {};
-  log("Step 8: Activity Created");
 
   let taskCreated = false;
   let taskReason = "";
   if (parsed.is_incoming) {
     if (shouldCreateTask) {
       if (responsibleUserId) {
-        const taskRes = await httpJson("POST", "https://api.close.com/api/v1/task/", {
-          headers: closeHeadersJson,
-          body: {
-            text: "WhatsApp beantworten",
-            lead_id: leadId,
-            assigned_to: responsibleUserId,
-            due_date: String(activityAt).split("T")[0],
-            is_complete: false,
-          },
-        });
-        taskCreated = taskRes.status >= 200 && taskRes.status < 300;
-        taskReason = taskCreated ? "Created successfully" : `Task HTTP ${taskRes.status}`;
+        const existing = await findOpenTask(leadId, responsibleUserId, taskText);
+        if (existing) {
+          taskReason = `Skipped duplicate task ${existing.id}`;
+        } else {
+          const taskRes = await httpJson("POST", "https://api.close.com/api/v1/task/", {
+            headers: closeHeadersJson,
+            body: {
+              text: taskText,
+              lead_id: leadId,
+              assigned_to: responsibleUserId,
+              due_date: String(activityAt).split("T")[0],
+              is_complete: false,
+            },
+          });
+          taskCreated = taskRes.status >= 200 && taskRes.status < 300;
+          taskReason = taskCreated ? "Created successfully" : `Task HTTP ${taskRes.status}`;
+        }
       } else {
         taskReason = "Skipped: No valid responsible user found";
       }
@@ -1086,13 +1214,15 @@ async function main() {
     success: true,
     lead_id: leadId,
     activity_id: newActivity.id,
+    activity_type: activityType,
     task_created: taskCreated,
     task_reason: taskReason,
     media_url: parsed.media_url,
     media_type: parsed.type,
     media_uploaded: Boolean(attachments.length),
     media_upload_error: mediaUploadError || undefined,
-    direction: activityData.direction,
+    recording_url: isVoice && attachments[0] ? attachments[0].url : undefined,
+    direction: parsed.is_incoming ? (isVoice ? "inbound" : "incoming") : isVoice ? "outbound" : "outgoing",
     remote_phone: parsed.remote_phone,
   });
 }
