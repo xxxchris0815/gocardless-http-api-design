@@ -163,7 +163,8 @@ class PhoneVariantTests(unittest.TestCase):
     def test_german_mobile_variants(self):
         variants = phone_search_variants("491601865421")
         self.assertIn("491601865421", variants)
-        self.assertIn("+491601865421", variants)
+        self.assertIn("00491601865421", variants)
+        self.assertIn("01601865421", variants)
         self.assertIn("1601865421", variants)
         self.assertIn("01601865421", variants)
 
@@ -204,8 +205,9 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("collectEvolutionPayloads", js)
         self.assertNotIn("instance_phone_map", js)
         self.assertNotIn("resolveLocalPhone", js)
-        self.assertIn("Unwrap Evolution Body", js)
-        self.assertIn("WhatsApp Webhook", js)
+        self.assertIn("qs", js)
+        self.assertIn("searchLeadByPhone", js)
+        self.assertIn("phone:", js)
 
 
 if __name__ == "__main__":

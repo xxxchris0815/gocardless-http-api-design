@@ -45,8 +45,11 @@ def phone_search_variants(remote_phone: str) -> list[str]:
     digits = clean_phone(remote_phone)
     if not digits:
         return []
-    variants = [digits, f"+{digits}"]
-    if len(digits) > 2:
+    variants = [digits, f"+{digits}", f"00{digits}"]
+    if digits.startswith("49") and len(digits) > 2:
+        national = digits[2:]
+        variants.extend([national, f"0{national}", f"+49{national}", f"0049{national}"])
+    elif len(digits) > 2:
         rest = digits[2:]
         variants.extend([rest, f"0{rest}"])
     seen: set[str] = set()

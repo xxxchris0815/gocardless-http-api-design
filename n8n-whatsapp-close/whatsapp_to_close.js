@@ -86,12 +86,25 @@ function cleanPhone(phone) {
 function phoneSearchVariants(remotePhone) {
   const digits = cleanPhone(remotePhone);
   if (!digits) return [];
-  const variants = [digits, `+${digits}`];
-  if (digits.length > 2) {
+  const variants = [digits, `+${digits}`, `00${digits}`];
+  if (digits.startsWith("49") && digits.length > 2) {
+    const national = digits.slice(2);
+    variants.push(national, `0${national}`, `+49${national}`, `0049${national}`);
+  } else if (digits.length > 2) {
     const rest = digits.slice(2);
     variants.push(rest, `0${rest}`);
   }
   return [...new Set(variants.filter(Boolean))];
+}
+
+function phonesMatch(a, b) {
+  const da = cleanPhone(a);
+  const db = cleanPhone(b);
+  if (!da || !db) return false;
+  if (da === db) return true;
+  const tailA = da.slice(-8);
+  const tailB = db.slice(-8);
+  return Boolean(tailA) && tailA === tailB;
 }
 
 function isGroupOrBroadcast(jid) {
@@ -329,7 +342,7 @@ function getCustomFieldValue(lead, fieldId) {
   return null;
 }
 
-async function httpJson(method, url, { headers = {}, body } = {}) {
+async function httpJson(method, url, { headers = {}, body, qs } = {}) {
   const options = {
     method,
     url,
@@ -340,6 +353,7 @@ async function httpJson(method, url, { headers = {}, body } = {}) {
     timeout: 20000,
   };
   if (body !== undefined) options.body = body;
+  if (qs !== undefined) options.qs = qs;
 
   if (httpHelper) {
     const result = await httpHelper(options);
@@ -349,7 +363,15 @@ async function httpJson(method, url, { headers = {}, body } = {}) {
     return { status: 200, data: result };
   }
   if (typeof fetch === "function") {
-    const res = await fetch(url, {
+    let fetchUrl = url;
+    if (qs) {
+      const u = new URL(url);
+      Object.keys(qs).forEach((key) => {
+        if (qs[key] !== undefined && qs[key] !== null) u.searchParams.set(key, String(qs[key]));
+      });
+      fetchUrl = u.toString();
+    }
+    const res = await fetch(fetchUrl, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -461,19 +483,28 @@ async function main() {
   }
 
   async function findResponsibleUserFromHistory(leadId) {
-    const qs = `lead_id=${encodeURIComponent(leadId)}&_limit=5&_order_by=-date_created&_fields=user_id,created_by,local_phone,remote_phone,id`;
     try {
-      const wa = await httpJson(
-        "GET",
-        `https://api.close.com/api/v1/activity/whatsapp_message/?${qs}`,
-        { headers: closeHeaders }
-      );
+      const wa = await httpJson("GET", "https://api.close.com/api/v1/activity/whatsapp_message/", {
+        headers: closeHeaders,
+        qs: {
+          lead_id: leadId,
+          _limit: 5,
+          _order_by: "-date_created",
+          _fields: "user_id,created_by,local_phone,remote_phone,id",
+        },
+      });
       if (wa.status === 200 && wa.data) {
         const match = filterActivities(wa.data.data, "history_whatsapp");
         if (match) return match;
       }
-      const call = await httpJson("GET", `https://api.close.com/api/v1/activity/call/?${qs}`, {
+      const call = await httpJson("GET", "https://api.close.com/api/v1/activity/call/", {
         headers: closeHeaders,
+        qs: {
+          lead_id: leadId,
+          _limit: 5,
+          _order_by: "-date_created",
+          _fields: "user_id,created_by,local_phone,remote_phone,id",
+        },
       });
       if (call.status === 200 && call.data) {
         const match = filterActivities(call.data.data, "history_call");
@@ -485,31 +516,82 @@ async function main() {
     return null;
   }
 
-  let searchData = null;
-  for (const p of phoneSearchVariants(parsed.remote_phone)) {
-    const url = `https://api.close.com/api/v1/lead/?query=${encodeURIComponent(`phone:"${p}"`)}`;
-    const res = await httpJson("GET", url, { headers: closeHeaders });
-    if (res.status === 200 && res.data && res.data.data && res.data.data.length) {
-      searchData = res.data;
-      log(`Step 2: Lead gefunden mit ${p}`);
-      break;
+  async function searchLeadByPhone(remotePhone) {
+    const variants = phoneSearchVariants(remotePhone);
+    const attempts = [];
+    const queries = [];
+    for (const p of variants) {
+      queries.push(`phone:${p}`);
+      queries.push(p);
     }
+    const seenQ = new Set();
+    for (const q of queries) {
+      if (seenQ.has(q)) continue;
+      seenQ.add(q);
+
+      const leadRes = await httpJson("GET", "https://api.close.com/api/v1/lead/", {
+        headers: closeHeaders,
+        qs: {
+          query: q,
+          _limit: 5,
+          _fields: "id,display_name,organization_id,contacts,custom",
+        },
+      });
+      const leadHits = leadRes.data && Array.isArray(leadRes.data.data) ? leadRes.data.data.length : 0;
+      attempts.push({ endpoint: "lead", query: q, status: leadRes.status, hits: leadHits });
+      if (leadRes.status === 200 && leadHits) {
+        const stub = leadRes.data.data[0];
+        log(`Step 2: Lead gefunden (${q})`);
+        const one = await httpJson("GET", `https://api.close.com/api/v1/lead/${stub.id}/`, {
+          headers: closeHeaders,
+        });
+        return { lead: one.status === 200 && one.data && one.data.id ? one.data : stub, attempts };
+      }
+
+      const contactRes = await httpJson("GET", "https://api.close.com/api/v1/contact/", {
+        headers: closeHeaders,
+        qs: {
+          query: q,
+          _limit: 5,
+          _fields: "id,lead_id,phones,display_name",
+        },
+      });
+      const contactHits =
+        contactRes.data && Array.isArray(contactRes.data.data) ? contactRes.data.data.length : 0;
+      attempts.push({ endpoint: "contact", query: q, status: contactRes.status, hits: contactHits });
+      if (contactRes.status === 200 && contactHits) {
+        const contact = contactRes.data.data[0];
+        if (contact.lead_id) {
+          const one = await httpJson("GET", `https://api.close.com/api/v1/lead/${contact.lead_id}/`, {
+            headers: closeHeaders,
+          });
+          if (one.status === 200 && one.data && one.data.id) {
+            log(`Step 2: Lead via Contact gefunden (${q})`);
+            return { lead: one.data, attempts };
+          }
+        }
+      }
+    }
+    return { lead: null, attempts };
   }
 
-  if (!searchData || !searchData.data.length) {
+  const found = await searchLeadByPhone(parsed.remote_phone);
+  if (!found.lead) {
     return result({
       success: false,
       error: "No lead found",
       remote_phone: parsed.remote_phone,
+      search_variants: phoneSearchVariants(parsed.remote_phone),
+      search_attempts: found.attempts,
     });
   }
 
-  const lead = searchData.data[0];
+  const lead = found.lead;
   const leadId = lead.id;
   let contactId = null;
   if (lead.contacts) {
     for (const c of lead.contacts) {
-      if (c.phones && c.phones.some((ph) => String(ph.phone || "").includes(parsed.remote_phone))) {
+      if (c.phones && c.phones.some((ph) => phonesMatch(ph.phone, parsed.remote_phone))) {
         contactId = c.id;
         break;
       }
@@ -554,8 +636,10 @@ async function main() {
   if (parsed.is_incoming && responsibleUserId) activityData.user_id = responsibleUserId;
   else if (!parsed.is_incoming && currentUserId) activityData.user_id = currentUserId;
 
-  const checkUrl = `https://api.close.com/api/v1/activity/whatsapp_message/?external_whatsapp_message_id=${encodeURIComponent(parsed.id)}`;
-  const checkRes = await httpJson("GET", checkUrl, { headers: closeHeaders });
+  const checkRes = await httpJson("GET", "https://api.close.com/api/v1/activity/whatsapp_message/", {
+    headers: closeHeaders,
+    qs: { external_whatsapp_message_id: parsed.id },
+  });
   if (checkRes.data && checkRes.data.data && checkRes.data.data.length) {
     const duplicateId = checkRes.data.data[0].id;
     log(`Step 6: Duplicate ${duplicateId}`);
