@@ -58,7 +58,7 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 | `excluded_phone_number` / `excluded_user_id` | History-Filter, falls das Custom Field leer ist |
 | `field_id_responsible_user` | Close Custom Field auf dem Lead; wenn gesetzt, hat es Vorrang vor der History |
 
-Import: `WhatsApp_Close_Activity.json`. Evolution zeigt auf die Production-URL (`whatsapp-close`).
+In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen). In **Config** `close_api_key` und `my_whatsapp_number` eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
 ```bash
 cd n8n-whatsapp-close

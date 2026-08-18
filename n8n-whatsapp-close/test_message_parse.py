@@ -204,7 +204,8 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("collectEvolutionPayloads", js)
         self.assertNotIn("instance_phone_map", js)
         self.assertNotIn("resolveLocalPhone", js)
-        self.assertIn("User via Custom Field", js)
+        self.assertIn("Unwrap Evolution Body", js)
+        self.assertIn("WhatsApp Webhook", js)
 
 
 if __name__ == "__main__":

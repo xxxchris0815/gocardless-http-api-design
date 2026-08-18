@@ -263,15 +263,49 @@ function collectEvolutionPayloads(raw, depth) {
   return found;
 }
 
-function extractPayloads(item) {
+function jsonFromNode(name) {
   try {
-    const all = $input.all().map((row) => row.json);
-    const fromAll = collectEvolutionPayloads(all);
-    if (fromAll.length) return fromAll;
+    if (typeof $ === "function") {
+      const ref = $(name);
+      if (ref && typeof ref.all === "function") {
+        return ref.all().map((row) => row.json).filter(Boolean);
+      }
+      if (ref && typeof ref.first === "function") {
+        const first = ref.first();
+        return first && first.json ? [first.json] : [];
+      }
+    }
+  } catch (e) {
+    /* node not in this execution */
+  }
+  try {
+    if (typeof $items === "function") {
+      return $items(name).map((row) => row.json).filter(Boolean);
+    }
   } catch (e) {
     /* ignore */
   }
-  return collectEvolutionPayloads(item);
+  try {
+    if (typeof $node !== "undefined" && $node[name] && $node[name].json) {
+      return [$node[name].json];
+    }
+  } catch (e) {
+    /* ignore */
+  }
+  return [];
+}
+
+function extractPayloads(item) {
+  const chunks = [];
+  try {
+    chunks.push(...$input.all().map((row) => row.json));
+  } catch (e) {
+    /* ignore */
+  }
+  if (item) chunks.push(item);
+  const names = ["Unwrap Evolution Body", "WhatsApp Webhook", "Message Events Only"];
+  for (const name of names) chunks.push(...jsonFromNode(name));
+  return collectEvolutionPayloads(chunks);
 }
 
 function parseWebhook(payload, defaultLocalPhone) {
@@ -372,6 +406,8 @@ async function main() {
       success: true,
       action: "skipped_irrelevant",
       event: (inputItem.body && inputItem.body.event) || inputItem.event || null,
+      hint: "Kein Evolution-Body (event + data) gefunden. Die Config-Node hat oft das Webhook-Item ersetzt — Workflow neu importieren.",
+      input_keys: Object.keys(inputItem || {}),
     });
   }
 

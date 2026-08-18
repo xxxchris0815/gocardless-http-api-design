@@ -131,18 +131,20 @@ workflow = {
         },
         {
             "parameters": {
-                "assignments": {
-                    "assignments": [assignment(name, value, i) for i, (name, value) in enumerate(ASSIGNMENTS)]
+                "keepOnlySet": False,
+                "values": {
+                    "string": [
+                        {"name": name, "value": value} for name, value in ASSIGNMENTS
+                    ]
                 },
-                "includeOtherFields": True,
                 "options": {},
             },
             "id": SET_ID,
             "name": "Config",
             "type": "n8n-nodes-base.set",
-            "typeVersion": 3.4,
+            "typeVersion": 2,
             "position": [920, 300],
-            "notes": "close_api_key und my_whatsapp_number eintragen. Custom Field für den zuständigen User hat Vorrang vor der History.",
+            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). close_api_key und my_whatsapp_number eintragen.",
         },
         {
             "parameters": {
