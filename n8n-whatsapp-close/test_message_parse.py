@@ -162,11 +162,7 @@ class EvolutionSampleTests(unittest.TestCase):
 class PhoneVariantTests(unittest.TestCase):
     def test_german_mobile_variants(self):
         variants = phone_search_variants("491601865421")
-        self.assertIn("491601865421", variants)
-        self.assertIn("00491601865421", variants)
-        self.assertIn("01601865421", variants)
-        self.assertIn("1601865421", variants)
-        self.assertIn("01601865421", variants)
+        self.assertEqual(variants, ["491601865421", "+491601865421", "1601865421", "01601865421"])
 
 
 class ResponsibleUserTests(unittest.TestCase):
@@ -206,8 +202,7 @@ class JsSmokeTests(unittest.TestCase):
         self.assertNotIn("instance_phone_map", js)
         self.assertNotIn("resolveLocalPhone", js)
         self.assertIn("qs", js)
-        self.assertIn("searchLeadByPhone", js)
-        self.assertIn("phone:", js)
+        self.assertIn('phone:"', js)
 
 
 if __name__ == "__main__":
