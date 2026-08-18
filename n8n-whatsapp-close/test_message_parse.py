@@ -163,6 +163,39 @@ class EvolutionSampleTests(unittest.TestCase):
         self.assertTrue(needs_media_upload(parsed["type"]))
         self.assertIsNone(parsed["media_url"])
 
+    def test_incoming_gif_video_message(self):
+        payload = {
+            "event": "messages.upsert",
+            "instance": "WA-Business_Alexandra",
+            "data": {
+                "key": {
+                    "remoteJid": "491601865421@s.whatsapp.net",
+                    "fromMe": False,
+                    "id": "3EB02B3ABADD9AB18F6B79",
+                },
+                "message": {
+                    "videoMessage": {
+                        "url": "https://mmg.whatsapp.net/o1/v/encrypted",
+                        "mimetype": "video/mp4",
+                        "seconds": 1,
+                        "gifPlayback": True,
+                        "accessibilityLabel": "TV gif. Timmy from Shaun the Sheep.",
+                    }
+                },
+                "messageType": "videoMessage",
+                "messageTimestamp": 1787071823,
+            },
+            "sender": "14087093943@s.whatsapp.net",
+            "server_url": "https://wa.orgasmic.live",
+        }
+        parsed = parse_webhook(payload, "491758925279")
+        self.assertEqual(parsed["type"], "gif")
+        self.assertTrue(parsed["is_incoming"])
+        self.assertIn("Timmy from Shaun the Sheep", parsed["text"])
+        self.assertNotIn("mmg.whatsapp.net", parsed["text"])
+        self.assertTrue(needs_media_upload(parsed["type"]))
+        self.assertEqual(filename_for_media("gif", "video/mp4"), "gif.mp4")
+
     def test_n8n_webhook_wrapper_array(self):
         wrapped = [
             {
@@ -241,6 +274,7 @@ class MediaUploadHelperTests(unittest.TestCase):
     def test_upload_kinds(self):
         self.assertTrue(needs_media_upload("image"))
         self.assertTrue(needs_media_upload("voice"))
+        self.assertTrue(needs_media_upload("gif"))
         self.assertTrue(needs_media_upload("audio"))
         self.assertFalse(needs_media_upload("text"))
         self.assertFalse(needs_media_upload("reaction"))
@@ -248,6 +282,7 @@ class MediaUploadHelperTests(unittest.TestCase):
     def test_filenames(self):
         self.assertEqual(filename_for_media("image", "image/jpeg"), "photo.jpg")
         self.assertEqual(filename_for_media("voice", "audio/ogg; codecs=opus"), "voice.ogg")
+        self.assertEqual(filename_for_media("gif", "video/mp4"), "gif.mp4")
         self.assertEqual(filename_for_media("document", "application/pdf", "Rechnung 1.pdf"), "Rechnung_1.pdf")
 
 
@@ -273,6 +308,8 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("evolution_base_url", js)
         self.assertIn("server_url", js)
         self.assertIn("normalizeForEvolution", js)
+        self.assertIn("gifPlayback", js)
+        self.assertIn("jpegThumbnail", js)
 
 
 if __name__ == "__main__":

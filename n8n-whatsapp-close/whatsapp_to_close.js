@@ -25,8 +25,18 @@ const WRAPPER_KEYS = [
   "viewOnceMessageV2Extension",
   "documentWithCaptionMessage",
 ];
-const MEDIA_UPLOAD_KINDS = ["image", "video", "audio", "voice", "document", "sticker"];
+const MEDIA_UPLOAD_KINDS = ["image", "video", "gif", "audio", "voice", "document", "sticker"];
 const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
+const EVOLUTION_STRIP_KEYS = [
+  "jpegThumbnail",
+  "waveform",
+  "firstScanSidecar",
+  "streamingSidecar",
+  "interactiveAnnotations",
+  "annotations",
+  "processedVideos",
+  "messageContextInfo",
+];
 
 const httpHelper = (() => {
   if (this && this.helpers && typeof this.helpers.httpRequest === "function") {
@@ -143,6 +153,7 @@ function filenameForMedia(kind, mime, given) {
     "image/png": "png",
     "image/webp": "webp",
     "image/gif": "gif",
+    "image/gif": "gif",
     "audio/ogg": "ogg",
     "audio/opus": "ogg",
     "audio/mpeg": "mp3",
@@ -157,7 +168,7 @@ function filenameForMedia(kind, mime, given) {
   if (!ext && clean.includes("/")) ext = clean.split("/")[1].replace(/[^a-z0-9]/g, "") || "bin";
   if (!ext) ext = "bin";
   const prefix =
-    { image: "photo", video: "video", audio: "audio", voice: "voice", document: "document", sticker: "sticker" }[
+    { image: "photo", video: "video", gif: "gif", audio: "audio", voice: "voice", document: "document", sticker: "sticker" }[
       kind
     ] || "media";
   return `${prefix}.${ext}`;
@@ -197,16 +208,23 @@ function longToNumber(value) {
   return high * 0x100000000 + low;
 }
 
-function normalizeForEvolution(node) {
+function normalizeForEvolution(node, depth) {
+  depth = depth || 0;
   if (node === undefined || node === null) return node;
   if (typeof Buffer !== "undefined" && Buffer.isBuffer(node)) return node.toString("base64");
-  if (Array.isArray(node)) return node.map(normalizeForEvolution);
+  if (Array.isArray(node)) return node.map((item) => normalizeForEvolution(item, depth + 1));
   if (typeof node !== "object") return node;
   if (isLongObject(node)) return longToNumber(node);
-  if (isNumericKeyedObject(node)) return numericKeyedToBase64(node);
+  if (isNumericKeyedObject(node)) {
+    const size = Object.keys(node).length;
+    if (size > 64) return undefined;
+    return numericKeyedToBase64(node);
+  }
   const out = {};
   Object.keys(node).forEach((key) => {
-    out[key] = normalizeForEvolution(node[key]);
+    if (EVOLUTION_STRIP_KEYS.includes(key)) return;
+    const val = normalizeForEvolution(node[key], depth + 1);
+    if (val !== undefined) out[key] = val;
   });
   return out;
 }
@@ -305,6 +323,10 @@ function messageTextFromParts(kind, caption, link, extra) {
     const body = caption || "🎥 Video empfangen";
     return `${body}${createMediaLink(link, "▶️", "Video ansehen")}`;
   }
+  if (kind === "gif") {
+    const body = caption || "🎞️ GIF empfangen";
+    return `${body}${createMediaLink(link, "▶️", "GIF ansehen")}`;
+  }
   if (kind === "audio" || kind === "voice") {
     const dur = extra ? ` (${extra})` : "";
     return `🎤 Sprachnachricht empfangen${dur}${createMediaLink(link, "▶️", "Abspielen")}`;
@@ -353,13 +375,14 @@ function evolutionContent(inner, messageType) {
   }
   if (inner.videoMessage) {
     const vid = inner.videoMessage;
+    const isGif = Boolean(vid.gifPlayback);
     return {
-      kind: "video",
-      caption: String(vid.caption || ""),
+      kind: isGif ? "gif" : "video",
+      caption: String(vid.caption || vid.accessibilityLabel || ""),
       link: vid.url || vid.mediaUrl || null,
       extra: "",
       mimetype: vid.mimetype || "video/mp4",
-      filename: "",
+      filename: isGif ? "gif.mp4" : "",
     };
   }
   if (inner.audioMessage) {

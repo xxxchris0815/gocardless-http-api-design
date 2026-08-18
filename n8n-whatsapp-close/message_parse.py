@@ -34,7 +34,7 @@ TYPE_MAP = {
     "locationMessage": "location",
 }
 
-MEDIA_UPLOAD_KINDS = frozenset({"image", "video", "audio", "voice", "document", "sticker"})
+MEDIA_UPLOAD_KINDS = frozenset({"image", "video", "gif", "audio", "voice", "document", "sticker"})
 MAX_MEDIA_BYTES = 20 * 1024 * 1024
 
 MIME_EXT = {
@@ -43,7 +43,8 @@ MIME_EXT = {
     "image/png": "png",
     "image/webp": "webp",
     "image/gif": "gif",
-    "audio/ogg": "ogg",
+        "image/gif": "gif",
+        "audio/ogg": "ogg",
     "audio/opus": "ogg",
     "audio/mpeg": "mp3",
     "audio/mp4": "m4a",
@@ -116,6 +117,7 @@ def filename_for_media(kind: str, mime: str = "", given: str = "") -> str:
     prefix = {
         "image": "photo",
         "video": "video",
+        "gif": "gif",
         "audio": "audio",
         "voice": "voice",
         "document": "document",
@@ -162,6 +164,9 @@ def message_text_from_parts(kind: str, caption: str, link: Optional[str], extra:
     if kind == "video":
         body = caption or "🎥 Video empfangen"
         return f"{body}{_create_media_link(link, '▶️', 'Video ansehen')}"
+    if kind == "gif":
+        body = caption or "🎞️ GIF empfangen"
+        return f"{body}{_create_media_link(link, '▶️', 'GIF ansehen')}"
     if kind in ("audio", "voice"):
         dur = f" ({extra})" if extra else ""
         return f"🎤 Sprachnachricht empfangen{dur}{_create_media_link(link, '▶️', 'Abspielen')}"
@@ -244,7 +249,10 @@ def _evolution_content(inner: dict, message_type: str) -> tuple[str, str, Option
         return "image", str(img.get("caption") or ""), img.get("url") or img.get("mediaUrl"), ""
     if "videoMessage" in inner:
         vid = inner["videoMessage"] or {}
-        return "video", str(vid.get("caption") or ""), vid.get("url") or vid.get("mediaUrl"), ""
+        is_gif = bool(vid.get("gifPlayback"))
+        kind = "gif" if is_gif else "video"
+        caption = str(vid.get("caption") or vid.get("accessibilityLabel") or "")
+        return kind, caption, vid.get("url") or vid.get("mediaUrl"), ""
     if "audioMessage" in inner:
         aud = inner["audioMessage"] or {}
         kind = "voice" if aud.get("ptt") else "audio"
