@@ -3,7 +3,7 @@
 Nur **Evolution API**. Webhooks `send.message` und `messages.upsert` werden zu Close-Aktivitäten. Incoming-Nachrichten erzeugen optional eine Task.
 
 - Text, Bild, Video, GIF, Dokument, Sticker → WhatsApp-Activity (Medien als Anhang)
-- Sprachnachricht (`ptt`) → **Call-Activity** mit abspielbarer Aufzeichnung (`recording_url`, Dauer, Task „WhatsApp Voice beantworten“)
+- Sprachnachricht (`ptt`) → zuerst WhatsApp-Hinweis mit Anhang/Abspiel-Link, danach **Call-Activity** mit Aufzeichnung (wie die zwei Zapier-Scripts)
 
 ```json
 {
@@ -50,8 +50,11 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 - Incoming: zuständiger User zuerst aus dem Custom Field, sonst letzte **Outbound**-Activity, sonst WA-/Call-History
 - Outgoing: Close-User aus `/me/`
 - Bilder, Video, GIF, Dokument, Sticker: Evolution `getBase64FromMediaMessage` → Close Files → WhatsApp-`attachments`
-- Voice: Evolution wandelt nach M4A (`convertToMp4`), n8n legt die Datei kurz zwischen, Close lädt sie über den **öffentlichen** GET-Webhook `whatsapp-close-recording`. Die Close-Files-URL (`app.close.com/go/file/…`) ist nicht öffentlich — Close kann sie nicht als Aufzeichnung abspielen.
-- Der Workflow muss **aktiv** sein, sonst kommt Close nicht an die Audio-URL
+- Voice (Zapier-Port):
+  1. WhatsApp-Activity als **Hinweis** (`🎤 Sprachnachricht empfangen` + `[▶️ Sprachdatei abspielen]`, Audio als Close-Files-Anhang)
+  2. Call mit `note_html`, `duration`, `recording_url` (öffentlicher GET-Webhook, analog zu Zapier `voice.link`)
+  3. Task „WhatsApp Voice beantworten“ ohne Duplikat
+- Der Workflow muss **aktiv** sein, sonst kann Close die Recording-URL nicht abholen
 - WhatsApp-CDN-URLs (`mmg.whatsapp.net`) werden nicht als Markdown verlinkt
 - Duplikate: gleiche `wamid` → skip (vor dem Media-Download)
 

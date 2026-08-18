@@ -350,7 +350,9 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("whatsapp-close-recording", js)
         self.assertIn("$getWorkflowStaticData", js)
         self.assertIn('source: "External"', js)
-        self.assertIn("convertAudio", js)
+        self.assertIn("created_by", js)
+        self.assertIn("Sprachdatei abspielen", js)
+        self.assertIn("hint_activity_id", js)
 
 
 if __name__ == "__main__":

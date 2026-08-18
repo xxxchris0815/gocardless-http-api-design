@@ -1182,6 +1182,15 @@ async function main() {
             contentType,
             media.fileName || parsed.filename
           );
+          attachments.push(
+            await uploadCloseFile({
+              authHeaders: closeHeaders,
+              filename,
+              contentType,
+              buffer: media.buffer,
+            })
+          );
+          log(`Step 7: Media hochgeladen (${contentType}, ${attachments[0].size} bytes)`);
           if (isVoice) {
             const token = storeVoiceRecording({
               buffer: media.buffer,
@@ -1199,18 +1208,8 @@ async function main() {
               mediaUploadError = "Recording-URL zeigt auf Close Files (nicht öffentlich)";
               voiceRecordingUrl = "";
             } else {
-              log(`Step 7: Voice für Close-Recording bereit (${contentType}, ${media.buffer.length} bytes)`);
+              log(`Step 7: Voice-Recording-URL bereit (${voiceRecordingUrl.split("?")[0]})`);
             }
-          } else {
-            attachments.push(
-              await uploadCloseFile({
-                authHeaders: closeHeaders,
-                filename,
-                contentType,
-                buffer: media.buffer,
-              })
-            );
-            log(`Step 7: Media hochgeladen (${contentType}, ${attachments[0].size} bytes)`);
           }
         }
       } catch (e) {
@@ -1221,9 +1220,56 @@ async function main() {
   }
 
   let newActivity = {};
+  let hintActivity = {};
   let activityType = "whatsapp_message";
+
+  function buildWhatsAppPayload(messageMarkdown) {
+    const activityData = {
+      organization_id: lead.organization_id,
+      lead_id: leadId,
+      contact_id: contactId,
+      status: parsed.is_incoming ? "received" : "sent",
+      direction: parsed.is_incoming ? "incoming" : "outgoing",
+      activity_at: activityAt,
+      local_phone: `+${parsed.local_phone}`,
+      remote_phone: `+${parsed.remote_phone}`,
+      message_markdown: messageMarkdown,
+      external_whatsapp_message_id: parsed.id,
+    };
+    if (attachments.length) activityData.attachments = attachments;
+    if (parsed.is_incoming && responsibleUserId) activityData.user_id = responsibleUserId;
+    else if (!parsed.is_incoming && currentUserId) activityData.user_id = currentUserId;
+    return activityData;
+  }
+
+  async function createWhatsAppActivity(messageMarkdown) {
+    const createUrl = parsed.is_incoming
+      ? "https://api.close.com/api/v1/activity/whatsapp_message/?send_to_inbox=true"
+      : "https://api.close.com/api/v1/activity/whatsapp_message/";
+    return httpJson("POST", createUrl, {
+      headers: closeHeadersJson,
+      body: buildWhatsAppPayload(messageMarkdown),
+    });
+  }
+
   if (isVoice) {
     const fromName = parsed.from_name || "WhatsApp";
+    const closeFileUrl = attachments[0] && attachments[0].url ? attachments[0].url : "";
+    const playUrl = closeFileUrl || voiceRecordingUrl;
+    let hintMarkdown = parsed.text || "🎤 Sprachnachricht empfangen";
+    if (playUrl) hintMarkdown += `\n\n[▶️ Sprachdatei abspielen](${playUrl})`;
+
+    const hintRes = await createWhatsAppActivity(hintMarkdown);
+    if (hintRes.status >= 200 && hintRes.status < 300) {
+      hintActivity = hintRes.data || {};
+      log(`Step 8a: WhatsApp-Hinweis ${hintActivity.id || "ok"}`);
+    } else {
+      log(`Step 8a: WhatsApp-Hinweis fehlgeschlagen HTTP ${hintRes.status}`);
+    }
+
+    const playHtml = playUrl
+      ? `<p><a href="${escapeHtml(playUrl)}">▶️ Sprachdatei abspielen</a></p>`
+      : "";
     const callData = {
       lead_id: leadId,
       contact_id: contactId,
@@ -1234,11 +1280,16 @@ async function main() {
       phone: `+${parsed.remote_phone}`,
       note_html: `<body><p>WhatsApp Sprachnachricht von ${escapeHtml(fromName)} ${
         parsed.is_incoming ? "empfangen" : "gesendet"
-      }</p><p>wa:${escapeHtml(parsed.id)}</p></body>`,
+      }</p>${playHtml}<p>wa:${escapeHtml(parsed.id)}</p></body>`,
     };
     if (voiceRecordingUrl) callData.recording_url = voiceRecordingUrl;
-    if (parsed.is_incoming && responsibleUserId) callData.user_id = responsibleUserId;
-    else if (!parsed.is_incoming && currentUserId) callData.user_id = currentUserId;
+    if (parsed.is_incoming && responsibleUserId) {
+      callData.user_id = responsibleUserId;
+      callData.created_by = responsibleUserId;
+    } else if (!parsed.is_incoming && currentUserId) {
+      callData.user_id = currentUserId;
+      callData.created_by = currentUserId;
+    }
 
     const createRes = await httpJson("POST", "https://api.close.com/api/v1/activity/call/", {
       headers: closeHeadersJson,
@@ -1251,32 +1302,14 @@ async function main() {
         error: "Call creation failed",
         details: createRes.data,
         http_status: createRes.status,
+        hint_activity_id: hintActivity.id,
       });
     }
     newActivity = createRes.data || {};
     activityType = "call";
-    log("Step 8: Call Activity Created");
+    log("Step 8b: Call Activity Created");
   } else {
-    const activityData = {
-      organization_id: lead.organization_id,
-      lead_id: leadId,
-      contact_id: contactId,
-      status: parsed.is_incoming ? "received" : "sent",
-      direction: parsed.is_incoming ? "incoming" : "outgoing",
-      activity_at: activityAt,
-      local_phone: `+${parsed.local_phone}`,
-      remote_phone: `+${parsed.remote_phone}`,
-      message_markdown: parsed.text,
-      external_whatsapp_message_id: parsed.id,
-    };
-    if (attachments.length) activityData.attachments = attachments;
-    if (parsed.is_incoming && responsibleUserId) activityData.user_id = responsibleUserId;
-    else if (!parsed.is_incoming && currentUserId) activityData.user_id = currentUserId;
-
-    const createUrl = parsed.is_incoming
-      ? "https://api.close.com/api/v1/activity/whatsapp_message/?send_to_inbox=true"
-      : "https://api.close.com/api/v1/activity/whatsapp_message/";
-    const createRes = await httpJson("POST", createUrl, { headers: closeHeadersJson, body: activityData });
+    const createRes = await createWhatsAppActivity(parsed.text);
     if (createRes.status < 200 || createRes.status >= 300) {
       return result({
         success: false,
@@ -1325,6 +1358,7 @@ async function main() {
     lead_id: leadId,
     activity_id: newActivity.id,
     activity_type: activityType,
+    hint_activity_id: isVoice ? hintActivity.id : undefined,
     task_created: taskCreated,
     task_reason: taskReason,
     media_url: parsed.media_url,
