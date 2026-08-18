@@ -80,3 +80,5 @@ Wenn Zapier bei einem Erstversuch ohne `confirmed` schon `{payment_id}_FAILED` a
 ## Weitere Workflows
 
 Odoo-Rechnung bezahlt → Close-Opportunity: [`n8n-odoo-close/`](../n8n-odoo-close/README.md)
+
+WhatsApp → Close Activity: [`n8n-whatsapp-close/`](../n8n-whatsapp-close/README.md)

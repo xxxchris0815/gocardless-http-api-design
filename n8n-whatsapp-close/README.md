@@ -1,0 +1,56 @@
+# WhatsApp → Close Activity (n8n)
+
+Evolution-API-Webhooks (`send.message`, `messages.upsert`) werden zu Close WhatsApp-Activities. Incoming-Nachrichten erzeugen optional die Task „WhatsApp beantworten“.
+
+Das Zapier-Script erwartete `{ messages: [...] }`. Der aktuelle Webhook sieht so aus:
+
+```json
+{
+  "event": "send.message",
+  "instance": "WA-B1",
+  "data": {
+    "key": { "fromMe": true, "id": "wamid.…", "remoteJid": "491601865421@s.whatsapp.net" },
+    "message": { "conversation": "was genau findest du toll" },
+    "messageType": "conversation",
+    "messageTimestamp": 1787049466
+  }
+}
+```
+
+Beides wird verstanden. Gruppen (`@g.us`) und Broadcasts werden übersprungen.
+
+## Ablauf
+
+1. **WhatsApp Webhook** — POST, antwortet sofort
+2. **Message Events Only** — nur `send.message` und `messages.upsert`
+3. **Config** — Close-Key und Nummern
+4. **Create Close WhatsApp Activity** — Lead suchen, Activity (idempotent über `external_whatsapp_message_id`), bei Incoming Task
+
+## Logik (wie Zapier)
+
+- Telefonvarianten: `49160…`, `+49160…`, `160…`, `0160…`
+- Incoming: zuständiger User aus letzter WA-/Call-History (ohne ausgeschlossene Nummer/User), sonst Custom Field
+- Outgoing: Close-User aus `/me/`
+- Medien: Caption + Markdown-Link. WhatsApp-CDN-URLs (`mmg.whatsapp.net`) werden nicht verlinkt — die sind verschlüsselt und laufen ab
+- Duplikate: gleiche `wamid` → skip
+
+## Config
+
+| Feld | Bedeutung |
+| --- | --- |
+| `close_api_key` | Close API-Key (nicht committen) |
+| `my_whatsapp_number` | lokale Nummer ohne `+` |
+| `instance_phone_map` | JSON, z. B. `{"WA-B1":"491758925279"}` |
+| `create_task` | `true`/`false` |
+| `excluded_phone_number` / `excluded_user_id` | History-Filter |
+| `field_id_responsible_user` | Close Custom Field für den zuständigen User |
+
+Import: `WhatsApp_Close_Activity.json`. Evolution zeigt auf die Production-URL (`whatsapp-close`).
+
+```bash
+cd n8n-whatsapp-close
+python3 -m unittest test_message_parse.py -v
+python3 generate_workflow.py
+```
+
+Den im Webhook-Body mitgelieferten `apikey` (Evolution/Meta) nicht ins Git und nicht nach Close schicken. Wenn er im Chat lag, rotieren.
