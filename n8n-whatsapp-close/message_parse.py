@@ -96,6 +96,31 @@ def public_media_url(url: Optional[str]) -> Optional[str]:
     return str(url)
 
 
+def is_close_app_file_url(url: Optional[str]) -> bool:
+    raw = str(url or "")
+    if not raw:
+        return False
+    host = (urlparse(raw).hostname or "").lower()
+    if host in {"app.close.com", "api.close.com"} or host.endswith(".close.com"):
+        return True
+    return "close.com/go/file" in raw.lower()
+
+
+def recording_public_url(webhook_url: str, token: str) -> str:
+    """Turn the incoming n8n webhook URL into the public Close recording GET URL."""
+    if not webhook_url or not token:
+        return ""
+    parsed = urlparse(webhook_url)
+    path = (parsed.path or "").replace("/webhook-test/", "/webhook/")
+    parts = path.rstrip("/").split("/")
+    if parts:
+        parts[-1] = "whatsapp-close-recording"
+    new_path = "/".join(parts)
+    if not new_path.startswith("/"):
+        new_path = "/" + new_path
+    return f"{parsed.scheme}://{parsed.netloc}{new_path}?t={token}"
+
+
 def needs_media_upload(kind: str) -> bool:
     return kind in MEDIA_UPLOAD_KINDS
 

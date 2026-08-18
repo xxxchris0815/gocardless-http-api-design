@@ -700,7 +700,92 @@ function pickEvolutionKey(payload) {
   );
 }
 
-async function fetchEvolutionMedia({ baseUrl, apiKey, instance, key, message }) {
+function pickIncomingWebhookUrl() {
+  const items = jsonFromNode("WhatsApp Webhook");
+  for (const it of items) {
+    if (it && it.webhookUrl) return String(it.webhookUrl);
+    const headers = (it && it.headers) || {};
+    const host = headers.host || headers.Host;
+    if (host) {
+      const proto = headers["x-forwarded-proto"] || headers["X-Forwarded-Proto"] || "https";
+      return `${proto}://${host}/webhook/whatsapp-close`;
+    }
+  }
+  if (inputItem && inputItem.webhookUrl) return String(inputItem.webhookUrl);
+  return "";
+}
+
+function recordingPublicUrl(token) {
+  const hook = pickIncomingWebhookUrl();
+  if (!hook || !token) return "";
+  try {
+    const u = new URL(hook);
+    let path = String(u.pathname || "").replace("/webhook-test/", "/webhook/");
+    const parts = path.replace(/\/+$/, "").split("/");
+    if (parts.length) parts[parts.length - 1] = "whatsapp-close-recording";
+    return `${u.origin}${parts.join("/")}?t=${encodeURIComponent(token)}`;
+  } catch (e) {
+    return "";
+  }
+}
+
+function isCloseAppFileUrl(url) {
+  const raw = String(url || "");
+  if (!raw) return false;
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    return host === "app.close.com" || host === "api.close.com" || host.endsWith(".close.com");
+  } catch (e) {
+    return /close\.com\/go\/file/i.test(raw);
+  }
+}
+
+function newRecordingToken() {
+  try {
+    if (typeof require === "function") {
+      return require("crypto").randomBytes(16).toString("hex");
+    }
+  } catch (e) {
+    /* sandbox without require */
+  }
+  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
+}
+
+function pruneRecordings(bag, now) {
+  const out = {};
+  const entries = Object.keys(bag || {}).map((k) => [k, bag[k]]);
+  entries.sort((a, b) => (Number((b[1] && b[1].exp) || 0) || 0) - (Number((a[1] && a[1].exp) || 0) || 0));
+  for (const [k, v] of entries) {
+    if (!v || (v.exp && v.exp < now)) continue;
+    if (Object.keys(out).length >= 30) break;
+    out[k] = v;
+  }
+  return out;
+}
+
+function storeVoiceRecording({ buffer, contentType, filename }) {
+  if (!buffer || !buffer.length) return "";
+  try {
+    if (typeof $getWorkflowStaticData !== "function") return "";
+    const staticData = $getWorkflowStaticData("global");
+    const now = Date.now();
+    const token = newRecordingToken();
+    const bag = pruneRecordings(staticData.waRecordings || {}, now);
+    bag[token] = {
+      b64: buffer.toString("base64"),
+      contentType: contentType || "audio/mp4",
+      filename: filename || "recording.m4a",
+      exp: now + 30 * 60 * 1000,
+    };
+    staticData.waRecordings = bag;
+    return token;
+  } catch (e) {
+    log(`Voice-Store fehlgeschlagen: ${e.message || e}`);
+    return "";
+  }
+}
+
+async function fetchEvolutionMedia({ baseUrl, apiKey, instance, key, message, convertAudio }) {
   const inst = encodeURIComponent(instance);
   const headers = { apikey: apiKey, Accept: "application/json", "Content-Type": "application/json" };
   const keyOnly = {
@@ -708,14 +793,15 @@ async function fetchEvolutionMedia({ baseUrl, apiKey, instance, key, message }) 
     remoteJid: key && key.remoteJid,
     fromMe: Boolean(key && key.fromMe),
   };
-  const bodies = [
-    { message: { key: keyOnly }, convertToMp4: false },
-    { message: { key: keyOnly }, convertToMp4: true },
-    {
+  const convertOrder = convertAudio ? [true, false] : [false, true];
+  const bodies = [];
+  for (const convertToMp4 of convertOrder) {
+    bodies.push({ message: { key: keyOnly }, convertToMp4 });
+    bodies.push({
       message: { key: keyOnly, message: normalizeForEvolution(message) },
-      convertToMp4: false,
-    },
-  ];
+      convertToMp4,
+    });
+  }
   const paths = [`/chat/getBase64FromMediaMessage/${inst}`, `/message/getBase64FromMediaMessage/${inst}`];
   let last = null;
   for (const p of paths) {
@@ -1064,6 +1150,7 @@ async function main() {
 
   let attachments = [];
   let mediaUploadError = "";
+  let voiceRecordingUrl = "";
   if (shouldUploadMedia && needsMediaUpload(parsed.type)) {
     if (!evolutionBase) {
       mediaUploadError = "evolution_base_url fehlt";
@@ -1082,6 +1169,7 @@ async function main() {
           instance: parsed.instance,
           key: parsed.raw_key || { id: parsed.id },
           message: parsed.raw_message,
+          convertAudio: isVoice || parsed.type === "audio",
         });
         if (media.buffer.length > MAX_MEDIA_BYTES) {
           mediaUploadError = `Datei zu groß (${media.buffer.length} bytes)`;
@@ -1094,15 +1182,36 @@ async function main() {
             contentType,
             media.fileName || parsed.filename
           );
-          attachments.push(
-            await uploadCloseFile({
-              authHeaders: closeHeaders,
-              filename,
-              contentType,
+          if (isVoice) {
+            const token = storeVoiceRecording({
               buffer: media.buffer,
-            })
-          );
-          log(`Step 7: Media hochgeladen (${contentType}, ${attachments[0].size} bytes)`);
+              contentType,
+              filename,
+            });
+            voiceRecordingUrl = recordingPublicUrl(token);
+            if (!token) {
+              mediaUploadError =
+                "Voice konnte nicht zwischengespeichert werden ($getWorkflowStaticData fehlt)";
+            } else if (!voiceRecordingUrl) {
+              mediaUploadError =
+                "Öffentliche Recording-URL fehlt (webhookUrl unbekannt). Workflow aktivieren und neu importieren.";
+            } else if (isCloseAppFileUrl(voiceRecordingUrl)) {
+              mediaUploadError = "Recording-URL zeigt auf Close Files (nicht öffentlich)";
+              voiceRecordingUrl = "";
+            } else {
+              log(`Step 7: Voice für Close-Recording bereit (${contentType}, ${media.buffer.length} bytes)`);
+            }
+          } else {
+            attachments.push(
+              await uploadCloseFile({
+                authHeaders: closeHeaders,
+                filename,
+                contentType,
+                buffer: media.buffer,
+              })
+            );
+            log(`Step 7: Media hochgeladen (${contentType}, ${attachments[0].size} bytes)`);
+          }
         }
       } catch (e) {
         mediaUploadError = String(e.message || e);
@@ -1118,6 +1227,7 @@ async function main() {
     const callData = {
       lead_id: leadId,
       contact_id: contactId,
+      source: "External",
       direction: parsed.is_incoming ? "inbound" : "outbound",
       status: "completed",
       duration: parsed.duration_seconds || 0,
@@ -1126,7 +1236,7 @@ async function main() {
         parsed.is_incoming ? "empfangen" : "gesendet"
       }</p><p>wa:${escapeHtml(parsed.id)}</p></body>`,
     };
-    if (attachments[0] && attachments[0].url) callData.recording_url = attachments[0].url;
+    if (voiceRecordingUrl) callData.recording_url = voiceRecordingUrl;
     if (parsed.is_incoming && responsibleUserId) callData.user_id = responsibleUserId;
     else if (!parsed.is_incoming && currentUserId) callData.user_id = currentUserId;
 
@@ -1219,9 +1329,9 @@ async function main() {
     task_reason: taskReason,
     media_url: parsed.media_url,
     media_type: parsed.type,
-    media_uploaded: Boolean(attachments.length),
+    media_uploaded: Boolean(attachments.length) || Boolean(voiceRecordingUrl),
     media_upload_error: mediaUploadError || undefined,
-    recording_url: isVoice && attachments[0] ? attachments[0].url : undefined,
+    recording_url: isVoice ? voiceRecordingUrl || undefined : undefined,
     direction: parsed.is_incoming ? (isVoice ? "inbound" : "incoming") : isVoice ? "outbound" : "outgoing",
     remote_phone: parsed.remote_phone,
   });

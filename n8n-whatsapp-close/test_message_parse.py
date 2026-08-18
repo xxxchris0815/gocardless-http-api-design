@@ -7,6 +7,7 @@ from pathlib import Path
 from message_parse import (
     collect_evolution_payloads,
     filename_for_media,
+    is_close_app_file_url,
     is_group_or_broadcast,
     is_relevant_event,
     needs_media_upload,
@@ -14,6 +15,7 @@ from message_parse import (
     phone_search_variants,
     pick_responsible_user,
     public_media_url,
+    recording_public_url,
 )
 
 
@@ -285,8 +287,36 @@ class MediaUploadHelperTests(unittest.TestCase):
     def test_filenames(self):
         self.assertEqual(filename_for_media("image", "image/jpeg"), "photo.jpg")
         self.assertEqual(filename_for_media("voice", "audio/ogg; codecs=opus"), "voice.ogg")
+        self.assertEqual(filename_for_media("voice", "audio/mp4"), "voice.m4a")
         self.assertEqual(filename_for_media("gif", "video/mp4"), "gif.mp4")
         self.assertEqual(filename_for_media("document", "application/pdf", "Rechnung 1.pdf"), "Rechnung_1.pdf")
+
+
+class RecordingUrlTests(unittest.TestCase):
+    def test_rewrites_n8n_webhook_to_recording_get(self):
+        url = recording_public_url(
+            "https://automation.orgasmic.live/webhook/whatsapp-close",
+            "abc123",
+        )
+        self.assertEqual(
+            url,
+            "https://automation.orgasmic.live/webhook/whatsapp-close-recording?t=abc123",
+        )
+
+    def test_promotes_test_webhook_to_production_path(self):
+        url = recording_public_url(
+            "https://automation.orgasmic.live/webhook-test/whatsapp-close",
+            "tok",
+        )
+        self.assertEqual(
+            url,
+            "https://automation.orgasmic.live/webhook/whatsapp-close-recording?t=tok",
+        )
+
+    def test_close_file_urls_are_not_public(self):
+        self.assertTrue(is_close_app_file_url("https://app.close.com/go/file/xyz/voice.ogg"))
+        self.assertTrue(is_close_app_file_url("https://api.close.com/api/v1/files/download/?x=1"))
+        self.assertFalse(is_close_app_file_url("https://automation.orgasmic.live/webhook/whatsapp-close-recording?t=1"))
 
 
 class JsSmokeTests(unittest.TestCase):
@@ -317,6 +347,10 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("WhatsApp Voice beantworten", js)
         self.assertIn("recording_url", js)
         self.assertIn("last_outbound_activity", js)
+        self.assertIn("whatsapp-close-recording", js)
+        self.assertIn("$getWorkflowStaticData", js)
+        self.assertIn('source: "External"', js)
+        self.assertIn("convertAudio", js)
 
 
 if __name__ == "__main__":
