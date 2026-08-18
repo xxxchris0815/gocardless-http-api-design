@@ -76,3 +76,7 @@ python3 generate_workflow.py
 ## Alte Fehlbuchungen
 
 Wenn Zapier bei einem Erstversuch ohne `confirmed` schon `{payment_id}_FAILED` als Minuszeile geschrieben hat, bleibt diese Zeile stehen. Den Phantom-Storno in Odoo einmalig löschen, sonst ist der Saldo nach dem erfolgreichen Wiedereinzug um genau diesen Betrag zu niedrig.
+
+## Weitere Workflows
+
+Odoo-Rechnung bezahlt → Close-Opportunity: [`n8n-odoo-close/`](../n8n-odoo-close/README.md)
