@@ -241,11 +241,38 @@ function parseEvolution(payload, defaultLocalPhone) {
   };
 }
 
-function extractPayload(item) {
-  if (item.body && typeof item.body === "object") return item.body;
-  if (typeof item.body === "string") return JSON.parse(item.body);
-  if (item.event && item.data) return item;
-  return item;
+function collectEvolutionPayloads(raw, depth) {
+  depth = depth || 0;
+  if (depth > 8 || raw === undefined || raw === null) return [];
+  if (typeof raw === "string") {
+    try {
+      return collectEvolutionPayloads(JSON.parse(raw), depth + 1);
+    } catch (e) {
+      return [];
+    }
+  }
+  if (Array.isArray(raw)) {
+    const found = [];
+    for (const item of raw) found.push(...collectEvolutionPayloads(item, depth + 1));
+    return found;
+  }
+  if (typeof raw !== "object") return [];
+  if (typeof raw.event === "string" && raw.data) return [raw];
+  const found = [];
+  if (raw.json) found.push(...collectEvolutionPayloads(raw.json, depth + 1));
+  if (raw.body) found.push(...collectEvolutionPayloads(raw.body, depth + 1));
+  return found;
+}
+
+function extractPayloads(item) {
+  try {
+    const all = $input.all().map((row) => row.json);
+    const fromAll = collectEvolutionPayloads(all);
+    if (fromAll.length) return fromAll;
+  } catch (e) {
+    /* ignore */
+  }
+  return collectEvolutionPayloads(item);
 }
 
 function parseWebhook(payload, defaultLocalPhone) {
@@ -345,13 +372,32 @@ async function main() {
   const defaultNumber = pick("my_whatsapp_number", "MY_WHATSAPP_NUMBER", "491758925279");
   const instanceMap = pick("instance_phone_map", "WA_INSTANCE_PHONE_MAP", "{}");
 
-  let payload;
+  let payloads = [];
   try {
-    payload = extractPayload(inputItem);
+    payloads = extractPayloads(inputItem);
   } catch (e) {
     return result({ success: false, error: "JSON Invalid" });
   }
 
+  if (!payloads.length) {
+    return result({
+      success: true,
+      action: "skipped_irrelevant",
+      event: (inputItem.body && inputItem.body.event) || inputItem.event || null,
+    });
+  }
+
+  const seenIds = new Set();
+  const uniquePayloads = [];
+  for (const p of payloads) {
+    const msgId = (p.data && p.data.key && p.data.key.id) || (p.data && p.data.id) || "";
+    const dedupe = msgId || `${p.event}:${p.date_time || ""}`;
+    if (seenIds.has(dedupe)) continue;
+    seenIds.add(dedupe);
+    uniquePayloads.push(p);
+  }
+
+  const payload = uniquePayloads[0];
   const localPhone = resolveLocalPhone(payload.instance, defaultNumber, instanceMap);
   const parsed = parseWebhook(payload, localPhone);
   if (!parsed) {

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 from urllib.parse import urlparse
@@ -224,5 +225,43 @@ def _evolution_content(inner: dict, message_type: str) -> tuple[str, str, Option
     return mapped, "", None, ""
 
 
+def looks_like_evolution(obj: Any) -> bool:
+    return (
+        isinstance(obj, dict)
+        and isinstance(obj.get("event"), str)
+        and isinstance(obj.get("data"), (dict, list))
+    )
+
+
+def collect_evolution_payloads(raw: Any, depth: int = 0) -> list[dict]:
+    """Find Evolution bodies inside n8n webhook items, arrays, or nested json/body."""
+    if depth > 8 or raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+        return collect_evolution_payloads(raw, depth + 1)
+    if isinstance(raw, list):
+        found: list[dict] = []
+        for item in raw:
+            found.extend(collect_evolution_payloads(item, depth + 1))
+        return found
+    if not isinstance(raw, dict):
+        return []
+    if looks_like_evolution(raw):
+        return [raw]
+    found = []
+    if "json" in raw:
+        found.extend(collect_evolution_payloads(raw["json"], depth + 1))
+    if "body" in raw:
+        found.extend(collect_evolution_payloads(raw["body"], depth + 1))
+    return found
+
+
 def parse_webhook(payload: dict, default_local_phone: str = "") -> Optional[dict]:
-    return parse_evolution_message(payload, default_local_phone)
+    bodies = collect_evolution_payloads(payload)
+    if not bodies:
+        return parse_evolution_message(payload, default_local_phone)
+    return parse_evolution_message(bodies[0], default_local_phone)

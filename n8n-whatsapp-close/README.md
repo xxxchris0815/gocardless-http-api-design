@@ -15,14 +15,30 @@ Nur **Evolution API**. Webhooks `send.message` und `messages.upsert` werden zu C
 }
 ```
 
-Andere Events (`connection.update`, Receipts, …) und das alte Zapier-Format `{ messages: [...] }` werden ignoriert. Gruppen (`@g.us`) und Broadcasts ebenfalls.
+Andere Events (`connection.update`, Receipts, …) werden ignoriert. Gruppen (`@g.us`) und Broadcasts ebenfalls.
+
+Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
+
+```json
+[
+  {
+    "headers": {},
+    "body": {
+      "event": "send.message",
+      "instance": "WA-B1",
+      "data": { "key": { "fromMe": true, "id": "wamid.…", "remoteJid": "49160…@s.whatsapp.net" }, "message": { "conversation": "…" } }
+    }
+  }
+]
+```
 
 ## Ablauf
 
 1. **WhatsApp Webhook** — POST, antwortet sofort
-2. **Message Events Only** — nur `send.message` und `messages.upsert`
-3. **Config** — Close-Key und Nummern
-4. **Create Close WhatsApp Activity** — Lead suchen, Activity (idempotent über `external_whatsapp_message_id`), bei Incoming Task
+2. **Unwrap Evolution Body** — holt `event`/`data` aus n8n-`headers`+`body`-Arrays
+3. **Message Events Only** — nur `send.message` und `messages.upsert`
+4. **Config** — Close-Key und Nummern
+5. **Create Close WhatsApp Activity** — Lead suchen, Activity, bei Incoming Task
 
 ## Logik
 

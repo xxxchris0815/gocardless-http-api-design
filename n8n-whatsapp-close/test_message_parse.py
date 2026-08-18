@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from message_parse import (
+    collect_evolution_payloads,
     is_group_or_broadcast,
     is_relevant_event,
     parse_webhook,
@@ -111,6 +112,36 @@ class EvolutionSampleTests(unittest.TestCase):
         self.assertTrue(is_relevant_event("send.message"))
         self.assertTrue(is_group_or_broadcast("status@broadcast"))
 
+    def test_n8n_webhook_wrapper_array(self):
+        wrapped = [
+            {
+                "headers": {"host": "automation.example.com"},
+                "params": {},
+                "query": {},
+                "body": SAMPLE_SEND,
+                "webhookUrl": "https://automation.example.com/webhook/abc",
+                "executionMode": "production",
+            }
+        ]
+        bodies = collect_evolution_payloads(wrapped)
+        self.assertEqual(len(bodies), 1)
+        parsed = parse_webhook(wrapped, "491758925279")
+        self.assertEqual(parsed["text"], "was genau findest du toll")
+        self.assertEqual(parsed["remote_phone"], "491601865421")
+        self.assertFalse(parsed["is_incoming"])
+
+        doubled = wrapped + wrapped
+        self.assertEqual(len(collect_evolution_payloads(doubled)), 2)
+
+    def test_n8n_item_with_config_fields_still_finds_body(self):
+        item = {
+            "close_api_key": "secret",
+            "headers": {},
+            "body": SAMPLE_SEND,
+        }
+        parsed = parse_webhook(item, "491758925279")
+        self.assertEqual(parsed["id"], SAMPLE_SEND["data"]["key"]["id"])
+
     def test_ignores_non_evolution_payloads(self):
         zapier = {
             "messages": [
@@ -153,6 +184,7 @@ class JsSmokeTests(unittest.TestCase):
         self.assertNotIn("parseLegacy", js)
         self.assertNotIn("from_me", js)
         self.assertNotIn("Zapier-Format", js)
+        self.assertIn("collectEvolutionPayloads", js)
 
 
 if __name__ == "__main__":
