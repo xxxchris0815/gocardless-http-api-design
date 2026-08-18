@@ -11,7 +11,8 @@
  *
  * Config:
  *  close_api_key, my_whatsapp_number, create_task,
- *  excluded_phone_number, excluded_user_id, field_id_responsible_user
+ *  excluded_phone_number, excluded_user_id, field_id_responsible_user,
+ *  evolution_base_url, evolution_api_key, upload_media
  */
 
 const RELEVANT_EVENTS = ["send.message", "messages.upsert"];
@@ -24,6 +25,8 @@ const WRAPPER_KEYS = [
   "viewOnceMessageV2Extension",
   "documentWithCaptionMessage",
 ];
+const MEDIA_UPLOAD_KINDS = ["image", "video", "audio", "voice", "document", "sticker"];
+const MAX_MEDIA_BYTES = 20 * 1024 * 1024;
 
 const httpHelper = (() => {
   if (this && this.helpers && typeof this.helpers.httpRequest === "function") {
@@ -120,6 +123,102 @@ function phonesMatch(a, b) {
   return Boolean(tailA) && tailA === tailB;
 }
 
+function needsMediaUpload(kind) {
+  return MEDIA_UPLOAD_KINDS.includes(kind);
+}
+
+function stripMime(mime) {
+  return String(mime || "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+}
+
+function filenameForMedia(kind, mime, given) {
+  const givenName = String(given || "").trim();
+  if (givenName) return givenName.replace(/[^\w.\-]+/g, "_");
+  const map = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "audio/ogg": "ogg",
+    "audio/opus": "ogg",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/aac": "aac",
+    "video/mp4": "mp4",
+    "video/3gpp": "3gp",
+    "application/pdf": "pdf",
+  };
+  const clean = stripMime(mime);
+  let ext = map[clean];
+  if (!ext && clean.includes("/")) ext = clean.split("/")[1].replace(/[^a-z0-9]/g, "") || "bin";
+  if (!ext) ext = "bin";
+  const prefix =
+    { image: "photo", video: "video", audio: "audio", voice: "voice", document: "document", sticker: "sticker" }[
+      kind
+    ] || "media";
+  return `${prefix}.${ext}`;
+}
+
+function decodeEvolutionBase64(data) {
+  if (!data) return null;
+  let payload = data;
+  if (typeof data === "string") {
+    try {
+      payload = JSON.parse(data);
+    } catch (e) {
+      payload = { base64: data };
+    }
+  }
+  if (typeof payload !== "object") return null;
+  const nested = payload.data && typeof payload.data === "object" ? payload.data : null;
+  const b64raw = payload.base64 || payload.buffer || (nested && (nested.base64 || nested.buffer));
+  if (!b64raw || typeof b64raw !== "string") return null;
+  let b64 = b64raw.replace(/\s/g, "");
+  let mimeFromUri = "";
+  const uri = /^data:([^;]+);base64,(.+)$/i.exec(b64);
+  if (uri) {
+    mimeFromUri = uri[1];
+    b64 = uri[2];
+  }
+  const buffer = Buffer.from(b64, "base64");
+  if (!buffer.length) return null;
+  return {
+    buffer,
+    mimetype: stripMime(payload.mimetype || payload.mimeType || (nested && nested.mimetype) || mimeFromUri),
+    fileName: payload.fileName || payload.filename || (nested && (nested.fileName || nested.filename)) || "",
+    mediaType: payload.mediaType || (nested && nested.mediaType) || "",
+  };
+}
+
+function buildMultipart(fields, filename, contentType, buffer) {
+  const boundary = `----CloseUpload${Date.now()}${Math.random().toString(16).slice(2)}`;
+  const parts = [];
+  Object.keys(fields || {}).forEach((key) => {
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${fields[key]}\r\n`,
+        "utf8"
+      )
+    );
+  });
+  parts.push(
+    Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`,
+      "utf8"
+    )
+  );
+  parts.push(buffer);
+  parts.push(Buffer.from(`\r\n--${boundary}--\r\n`, "utf8"));
+  return {
+    contentType: `multipart/form-data; boundary=${boundary}`,
+    body: Buffer.concat(parts),
+  };
+}
+
 function isGroupOrBroadcast(jid) {
   const s = String(jid || "").toLowerCase();
   return SKIP_JID_MARKERS.some((m) => s.includes(m));
@@ -179,17 +278,40 @@ function messageTextFromParts(kind, caption, link, extra) {
 }
 
 function evolutionContent(inner, messageType) {
-  if (inner.conversation) return { kind: "text", caption: String(inner.conversation), link: null, extra: "" };
+  if (inner.conversation) {
+    return { kind: "text", caption: String(inner.conversation), link: null, extra: "", mimetype: "", filename: "" };
+  }
   if (inner.extendedTextMessage) {
-    return { kind: "text", caption: String(inner.extendedTextMessage.text || ""), link: null, extra: "" };
+    return {
+      kind: "text",
+      caption: String(inner.extendedTextMessage.text || ""),
+      link: null,
+      extra: "",
+      mimetype: "",
+      filename: "",
+    };
   }
   if (inner.imageMessage) {
     const img = inner.imageMessage;
-    return { kind: "image", caption: String(img.caption || ""), link: img.url || img.mediaUrl || null, extra: "" };
+    return {
+      kind: "image",
+      caption: String(img.caption || ""),
+      link: img.url || img.mediaUrl || null,
+      extra: "",
+      mimetype: img.mimetype || "image/jpeg",
+      filename: "",
+    };
   }
   if (inner.videoMessage) {
     const vid = inner.videoMessage;
-    return { kind: "video", caption: String(vid.caption || ""), link: vid.url || vid.mediaUrl || null, extra: "" };
+    return {
+      kind: "video",
+      caption: String(vid.caption || ""),
+      link: vid.url || vid.mediaUrl || null,
+      extra: "",
+      mimetype: vid.mimetype || "video/mp4",
+      filename: "",
+    };
   }
   if (inner.audioMessage) {
     const aud = inner.audioMessage;
@@ -198,6 +320,8 @@ function evolutionContent(inner, messageType) {
       caption: "",
       link: aud.url || aud.mediaUrl || null,
       extra: "",
+      mimetype: aud.mimetype || "audio/ogg",
+      filename: "",
     };
   }
   if (inner.documentMessage) {
@@ -207,24 +331,56 @@ function evolutionContent(inner, messageType) {
       caption: String(doc.caption || ""),
       link: doc.url || doc.mediaUrl || null,
       extra: String(doc.fileName || doc.filename || "Dokument"),
+      mimetype: doc.mimetype || "application/octet-stream",
+      filename: String(doc.fileName || doc.filename || ""),
     };
   }
   if (inner.stickerMessage) {
     const st = inner.stickerMessage;
-    return { kind: "sticker", caption: "", link: st.url || st.mediaUrl || null, extra: "" };
+    return {
+      kind: "sticker",
+      caption: "",
+      link: st.url || st.mediaUrl || null,
+      extra: "",
+      mimetype: st.mimetype || "image/webp",
+      filename: "",
+    };
   }
   if (inner.reactionMessage) {
-    return { kind: "reaction", caption: String(inner.reactionMessage.text || ""), link: null, extra: "" };
+    return {
+      kind: "reaction",
+      caption: String(inner.reactionMessage.text || ""),
+      link: null,
+      extra: "",
+      mimetype: "",
+      filename: "",
+    };
   }
   if (inner.locationMessage) {
     const loc = inner.locationMessage;
-    return { kind: "location", caption: String(loc.name || loc.address || ""), link: null, extra: "" };
+    return {
+      kind: "location",
+      caption: String(loc.name || loc.address || ""),
+      link: null,
+      extra: "",
+      mimetype: "",
+      filename: "",
+    };
   }
   if (inner.contactMessage) {
-    return { kind: "contact", caption: String(inner.contactMessage.displayName || ""), link: null, extra: "" };
+    return {
+      kind: "contact",
+      caption: String(inner.contactMessage.displayName || ""),
+      link: null,
+      extra: "",
+      mimetype: "",
+      filename: "",
+    };
   }
-  if (messageType === "conversation") return { kind: "text", caption: "", link: null, extra: "" };
-  return { kind: messageType || "unknown", caption: "", link: null, extra: "" };
+  if (messageType === "conversation") {
+    return { kind: "text", caption: "", link: null, extra: "", mimetype: "", filename: "" };
+  }
+  return { kind: messageType || "unknown", caption: "", link: null, extra: "", mimetype: "", filename: "" };
 }
 
 function parseEvolution(payload, defaultLocalPhone) {
@@ -244,7 +400,7 @@ function parseEvolution(payload, defaultLocalPhone) {
   if (!msgId) return null;
 
   const inner = unwrapMessage(data.message || {});
-  const { kind, caption, link, extra } = evolutionContent(inner, data.messageType || "");
+  const { kind, caption, link, extra, mimetype, filename } = evolutionContent(inner, data.messageType || "");
   let text = messageTextFromParts(kind, caption, link, extra);
   if (!String(text).trim()) {
     if (kind === "reaction") return { skip: true, reason: "Reaction removed", id: msgId };
@@ -263,6 +419,10 @@ function parseEvolution(payload, defaultLocalPhone) {
     timestamp: data.messageTimestamp,
     instance: payload.instance,
     event,
+    mimetype: mimetype || "",
+    filename: filename || "",
+    raw_key: key,
+    raw_message: data.message || {},
   };
 }
 
@@ -355,15 +515,15 @@ function getCustomFieldValue(lead, fieldId) {
   return null;
 }
 
-async function httpJson(method, url, { headers = {}, body, qs } = {}) {
+async function httpCall(method, url, { headers = {}, body, qs, timeout = 20000, json = true } = {}) {
   const options = {
     method,
     url,
     headers,
-    json: true,
+    json,
     ignoreHttpStatusErrors: true,
     returnFullResponse: true,
-    timeout: 20000,
+    timeout,
   };
   if (body !== undefined) options.body = body;
   if (qs !== undefined) options.qs = qs;
@@ -384,20 +544,113 @@ async function httpJson(method, url, { headers = {}, body, qs } = {}) {
       });
       fetchUrl = u.toString();
     }
+    const fetchHeaders = { ...headers };
+    let fetchBody;
+    if (body !== undefined) {
+      if (json) {
+        if (!fetchHeaders["Content-Type"] && !fetchHeaders["content-type"]) {
+          fetchHeaders["Content-Type"] = "application/json";
+        }
+        fetchBody = JSON.stringify(body);
+      } else {
+        fetchBody = body;
+      }
+    }
     const res = await fetch(fetchUrl, {
       method,
-      headers,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      headers: fetchHeaders,
+      body: fetchBody,
     });
     let data = null;
-    try {
-      data = await res.json();
-    } catch (e) {
-      data = null;
+    if (json) {
+      try {
+        data = await res.json();
+      } catch (e) {
+        data = null;
+      }
+    } else {
+      data = await res.text();
     }
     return { status: res.status, data };
   }
   throw new Error("Kein HTTP-Helper in diesem Code-Node.");
+}
+
+async function httpJson(method, url, opts = {}) {
+  return httpCall(method, url, { ...opts, json: true });
+}
+
+function normalizeEvolutionBase(url) {
+  return String(url || "")
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+function pickEvolutionApiKeyFromWebhook() {
+  const items = jsonFromNode("WhatsApp Webhook");
+  for (const it of items) {
+    const k = (it && it.body && it.body.apikey) || (it && it.apikey);
+    if (k) return String(k).trim();
+  }
+  return "";
+}
+
+async function fetchEvolutionMedia({ baseUrl, apiKey, instance, key, message }) {
+  const inst = encodeURIComponent(instance);
+  const headers = { apikey: apiKey, Accept: "application/json", "Content-Type": "application/json" };
+  const body = {
+    message: {
+      key: {
+        id: key && key.id,
+        remoteJid: key && key.remoteJid,
+        fromMe: Boolean(key && key.fromMe),
+      },
+      message,
+    },
+    convertToMp4: false,
+  };
+  const paths = [`/chat/getBase64FromMediaMessage/${inst}`, `/message/getBase64FromMediaMessage/${inst}`];
+  let last = null;
+  for (const p of paths) {
+    const res = await httpJson("POST", `${baseUrl}${p}`, { headers, body, timeout: 60000 });
+    last = res;
+    if (res.status >= 200 && res.status < 300) {
+      const decoded = decodeEvolutionBase64(res.data);
+      if (decoded) return decoded;
+    }
+  }
+  const errDetail =
+    last && last.data && (last.data.message || last.data.error || last.data.status);
+  throw new Error(`Evolution media HTTP ${last && last.status}${errDetail ? `: ${errDetail}` : ""}`);
+}
+
+async function uploadCloseFile({ authHeaders, filename, contentType, buffer }) {
+  const metaRes = await httpJson("POST", "https://api.close.com/api/v1/files/upload/", {
+    headers: { ...authHeaders, "Content-Type": "application/json" },
+    body: { filename, content_type: contentType },
+    timeout: 20000,
+  });
+  if (metaRes.status < 200 || metaRes.status >= 300 || !metaRes.data || !metaRes.data.upload) {
+    throw new Error(`Close files/upload HTTP ${metaRes.status}`);
+  }
+  const downloadUrl = metaRes.data.download && metaRes.data.download.url;
+  if (!downloadUrl) throw new Error("Close files/upload ohne download.url");
+  const multipart = buildMultipart(metaRes.data.upload.fields || {}, filename, contentType, buffer);
+  const s3 = await httpCall("POST", metaRes.data.upload.url, {
+    headers: { "Content-Type": multipart.contentType },
+    body: multipart.body,
+    json: false,
+    timeout: 60000,
+  });
+  if (s3.status !== 201 && s3.status !== 200 && s3.status !== 204) {
+    throw new Error(`Close S3 upload HTTP ${s3.status}`);
+  }
+  return {
+    url: downloadUrl,
+    filename,
+    size: buffer.length,
+    content_type: contentType,
+  };
 }
 
 function result(extra) {
@@ -434,6 +687,10 @@ async function main() {
     .replace(/^custom\./, "");
   const shouldCreateTask = pickBool("create_task", "WA_CREATE_TASK", true);
   const localPhone = cleanPhone(pick("my_whatsapp_number", "MY_WHATSAPP_NUMBER", "491758925279"));
+  const evolutionBase = normalizeEvolutionBase(pick("evolution_base_url", "EVOLUTION_BASE_URL", ""));
+  const evolutionKey =
+    String(pick("evolution_api_key", "EVOLUTION_API_KEY", "")).trim() || pickEvolutionApiKeyFromWebhook();
+  const shouldUploadMedia = pickBool("upload_media", "WA_UPLOAD_MEDIA", true);
 
   let payloads = [];
   try {
@@ -605,20 +862,6 @@ async function main() {
   }
 
   const activityAt = isoFromTimestamp(parsed.timestamp, payload.date_time);
-  const activityData = {
-    organization_id: lead.organization_id,
-    lead_id: leadId,
-    contact_id: contactId,
-    status: parsed.is_incoming ? "received" : "sent",
-    direction: parsed.is_incoming ? "incoming" : "outgoing",
-    activity_at: activityAt,
-    local_phone: `+${parsed.local_phone}`,
-    remote_phone: `+${parsed.remote_phone}`,
-    message_markdown: parsed.text,
-    external_whatsapp_message_id: parsed.id,
-  };
-  if (parsed.is_incoming && responsibleUserId) activityData.user_id = responsibleUserId;
-  else if (!parsed.is_incoming && currentUserId) activityData.user_id = currentUserId;
 
   const checkRes = await httpJson("GET", "https://api.close.com/api/v1/activity/whatsapp_message/", {
     headers: closeHeaders,
@@ -634,6 +877,71 @@ async function main() {
       duplicate_activity_id: duplicateId,
     });
   }
+
+  let attachments = [];
+  let mediaUploadError = "";
+  if (shouldUploadMedia && needsMediaUpload(parsed.type)) {
+    if (!evolutionBase) {
+      mediaUploadError = "evolution_base_url fehlt";
+      log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
+    } else if (!evolutionKey) {
+      mediaUploadError = "evolution_api_key fehlt";
+      log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
+    } else if (!parsed.instance) {
+      mediaUploadError = "instance fehlt im Webhook";
+      log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
+    } else {
+      try {
+        const media = await fetchEvolutionMedia({
+          baseUrl: evolutionBase,
+          apiKey: evolutionKey,
+          instance: parsed.instance,
+          key: parsed.raw_key || { id: parsed.id },
+          message: parsed.raw_message,
+        });
+        if (media.buffer.length > MAX_MEDIA_BYTES) {
+          mediaUploadError = `Datei zu groß (${media.buffer.length} bytes)`;
+          log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
+        } else {
+          const contentType =
+            stripMime(media.mimetype || parsed.mimetype) || "application/octet-stream";
+          const filename = filenameForMedia(
+            parsed.type,
+            contentType,
+            media.fileName || parsed.filename
+          );
+          attachments.push(
+            await uploadCloseFile({
+              authHeaders: closeHeaders,
+              filename,
+              contentType,
+              buffer: media.buffer,
+            })
+          );
+          log(`Step 7: Media hochgeladen (${contentType}, ${attachments[0].size} bytes)`);
+        }
+      } catch (e) {
+        mediaUploadError = String(e.message || e);
+        log(`Step 7: Media-Upload fehlgeschlagen: ${mediaUploadError}`);
+      }
+    }
+  }
+
+  const activityData = {
+    organization_id: lead.organization_id,
+    lead_id: leadId,
+    contact_id: contactId,
+    status: parsed.is_incoming ? "received" : "sent",
+    direction: parsed.is_incoming ? "incoming" : "outgoing",
+    activity_at: activityAt,
+    local_phone: `+${parsed.local_phone}`,
+    remote_phone: `+${parsed.remote_phone}`,
+    message_markdown: parsed.text,
+    external_whatsapp_message_id: parsed.id,
+  };
+  if (attachments.length) activityData.attachments = attachments;
+  if (parsed.is_incoming && responsibleUserId) activityData.user_id = responsibleUserId;
+  else if (!parsed.is_incoming && currentUserId) activityData.user_id = currentUserId;
 
   const createUrl = parsed.is_incoming
     ? "https://api.close.com/api/v1/activity/whatsapp_message/?send_to_inbox=true"
@@ -684,6 +992,8 @@ async function main() {
     task_reason: taskReason,
     media_url: parsed.media_url,
     media_type: parsed.type,
+    media_uploaded: Boolean(attachments.length),
+    media_upload_error: mediaUploadError || undefined,
     direction: activityData.direction,
     remote_phone: parsed.remote_phone,
   });

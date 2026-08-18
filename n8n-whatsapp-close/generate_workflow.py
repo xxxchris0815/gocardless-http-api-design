@@ -22,6 +22,9 @@ ASSIGNMENTS = [
     ("excluded_phone_number", "16416666880"),
     ("excluded_user_id", "user_JLZiYec3UhCAKchqWJLr3AMa3MeYlQeX2J0c0Ule6e0"),
     ("field_id_responsible_user", "cf_XNUTqdtJkSXJIt2XdfS61YyinahAvTWplVfvI8qMZkK"),
+    ("evolution_base_url", ""),
+    ("evolution_api_key", ""),
+    ("upload_media", "true"),
 ]
 
 UNWRAP_JS = """function collect(raw, depth) {
@@ -144,7 +147,7 @@ workflow = {
             "type": "n8n-nodes-base.set",
             "typeVersion": 2,
             "position": [920, 300],
-            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). close_api_key = Klartext-Key (api_…), nicht der Hash aus der Close-UI.",
+            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). close_api_key = Klartext-Key (api_…). Für Bilder/Voice: evolution_base_url + evolution_api_key.",
         },
         {
             "parameters": {

@@ -34,6 +34,25 @@ TYPE_MAP = {
     "locationMessage": "location",
 }
 
+MEDIA_UPLOAD_KINDS = frozenset({"image", "video", "audio", "voice", "document", "sticker"})
+MAX_MEDIA_BYTES = 20 * 1024 * 1024
+
+MIME_EXT = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "audio/ogg": "ogg",
+    "audio/opus": "ogg",
+    "audio/mpeg": "mp3",
+    "audio/mp4": "m4a",
+    "audio/aac": "aac",
+    "video/mp4": "mp4",
+    "video/3gpp": "3gp",
+    "application/pdf": "pdf",
+}
+
 
 def clean_phone(phone: Optional[str]) -> str:
     if not phone:
@@ -74,6 +93,35 @@ def public_media_url(url: Optional[str]) -> Optional[str]:
     if any(cdn in host for cdn in WHATSAPP_CDN):
         return None
     return str(url)
+
+
+def needs_media_upload(kind: str) -> bool:
+    return kind in MEDIA_UPLOAD_KINDS
+
+
+def strip_mime(mime: Optional[str]) -> str:
+    return (mime or "").split(";")[0].strip().lower()
+
+
+def filename_for_media(kind: str, mime: str = "", given: str = "") -> str:
+    given_name = (given or "").strip()
+    if given_name:
+        return re.sub(r"[^\w.\-]+", "_", given_name)
+    clean = strip_mime(mime)
+    ext = MIME_EXT.get(clean)
+    if not ext and "/" in clean:
+        ext = re.sub(r"[^a-z0-9]", "", clean.split("/", 1)[1]) or "bin"
+    if not ext:
+        ext = "bin"
+    prefix = {
+        "image": "photo",
+        "video": "video",
+        "audio": "audio",
+        "voice": "voice",
+        "document": "document",
+        "sticker": "sticker",
+    }.get(kind, "media")
+    return f"{prefix}.{ext}"
 
 
 def unwrap_message(message: Any) -> dict:

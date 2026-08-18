@@ -6,8 +6,10 @@ from pathlib import Path
 
 from message_parse import (
     collect_evolution_payloads,
+    filename_for_media,
     is_group_or_broadcast,
     is_relevant_event,
+    needs_media_upload,
     parse_webhook,
     phone_search_variants,
     pick_responsible_user,
@@ -187,6 +189,20 @@ class MediaUrlTests(unittest.TestCase):
         self.assertEqual(public_media_url("https://files.example.com/a.jpg"), "https://files.example.com/a.jpg")
 
 
+class MediaUploadHelperTests(unittest.TestCase):
+    def test_upload_kinds(self):
+        self.assertTrue(needs_media_upload("image"))
+        self.assertTrue(needs_media_upload("voice"))
+        self.assertTrue(needs_media_upload("audio"))
+        self.assertFalse(needs_media_upload("text"))
+        self.assertFalse(needs_media_upload("reaction"))
+
+    def test_filenames(self):
+        self.assertEqual(filename_for_media("image", "image/jpeg"), "photo.jpg")
+        self.assertEqual(filename_for_media("voice", "audio/ogg; codecs=opus"), "voice.ogg")
+        self.assertEqual(filename_for_media("document", "application/pdf", "Rechnung 1.pdf"), "Rechnung_1.pdf")
+
+
 class JsSmokeTests(unittest.TestCase):
     def test_n8n_script_is_evolution_only(self):
         js = Path(__file__).with_name("whatsapp_to_close.js").read_text(encoding="utf-8")
@@ -203,6 +219,10 @@ class JsSmokeTests(unittest.TestCase):
         self.assertNotIn("resolveLocalPhone", js)
         self.assertIn("qs", js)
         self.assertIn('phone:"', js)
+        self.assertIn("getBase64FromMediaMessage", js)
+        self.assertIn("files/upload", js)
+        self.assertIn("attachments", js)
+        self.assertIn("evolution_base_url", js)
 
 
 if __name__ == "__main__":

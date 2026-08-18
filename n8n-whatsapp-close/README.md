@@ -45,8 +45,9 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 - Telefonvarianten: `49160…`, `+49160…`, `160…`, `0160…`
 - Incoming: zuständiger User zuerst aus dem Custom Field, sonst WA-/Call-History
 - Outgoing: Close-User aus `/me/`
-- Medien: Caption + Markdown-Link. WhatsApp-CDN-URLs (`mmg.whatsapp.net`) werden nicht verlinkt
-- Duplikate: gleiche `wamid` → skip
+- Bilder, Voice Notes, Audio, Video, Dokumente, Sticker: Evolution `POST /chat/getBase64FromMediaMessage/{instance}`, dann Close Files-API, dann Activity-`attachments`. Ohne Evolution-URL bleibt nur der Textplatzhalter
+- WhatsApp-CDN-URLs (`mmg.whatsapp.net`) werden nicht als Markdown verlinkt
+- Duplikate: gleiche `wamid` → skip (vor dem Media-Download)
 
 ## Config
 
@@ -57,6 +58,9 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 | `create_task` | `true`/`false` |
 | `excluded_phone_number` / `excluded_user_id` | History-Filter, falls das Custom Field leer ist |
 | `field_id_responsible_user` | Close Custom Field auf dem Lead; wenn gesetzt, hat es Vorrang vor der History |
+| `evolution_base_url` | Evolution-Server, z. B. `https://evo.example.com` (ohne Slash am Ende) |
+| `evolution_api_key` | Evolution-`apikey`. Fallback: `apikey` aus dem originalen Webhook |
+| `upload_media` | `true`/`false`, Default `true` |
 
 In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen). In **Config** `close_api_key` und `my_whatsapp_number` eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
