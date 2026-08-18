@@ -1,4 +1,4 @@
-"""Parse WhatsApp webhooks (Evolution API + legacy Zapier/Cloud format) for Close."""
+"""Parse Evolution API WhatsApp webhooks for Close."""
 
 from __future__ import annotations
 
@@ -135,7 +135,7 @@ def message_text_from_parts(kind: str, caption: str, link: Optional[str], extra:
 def parse_evolution_message(payload: dict, default_local_phone: str) -> Optional[dict]:
     """Normalize an Evolution API webhook body into a Close-ready message dict."""
     event = payload.get("event")
-    if event and not is_relevant_event(event):
+    if not is_relevant_event(event):
         return None
 
     data = payload.get("data") or payload
@@ -168,7 +168,6 @@ def parse_evolution_message(payload: dict, default_local_phone: str) -> Optional
     ts = data.get("messageTimestamp") or data.get("messageTimestamp")
     return {
         "id": msg_id,
-        "from_me": from_me,
         "is_incoming": not from_me,
         "remote_phone": remote_phone,
         "local_phone": local_phone,
@@ -225,71 +224,5 @@ def _evolution_content(inner: dict, message_type: str) -> tuple[str, str, Option
     return mapped, "", None, ""
 
 
-def parse_legacy_message(payload: dict, default_local_phone: str) -> Optional[dict]:
-    messages = payload.get("messages") or []
-    if not messages:
-        return None
-    message = messages[0]
-    from_me = bool(message.get("from_me"))
-    if from_me:
-        jid = message.get("chat_id") or ""
-    else:
-        jid = message.get("from") or message.get("chat_id") or ""
-    if is_group_or_broadcast(jid):
-        return None
-    remote_phone = clean_phone(jid.split("@")[0] if "@" in str(jid) else jid)
-    kind = message.get("type") or "text"
-    link = None
-    caption = ""
-    extra = ""
-    if kind == "text":
-        caption = (message.get("text") or {}).get("body") or ""
-    elif kind == "image":
-        img = message.get("image") or {}
-        caption = img.get("caption") or ""
-        link = img.get("link")
-    elif kind == "video":
-        vid = message.get("video") or {}
-        caption = vid.get("caption") or ""
-        link = vid.get("link")
-    elif kind in ("audio", "voice"):
-        payload_m = message.get(kind) or {}
-        link = payload_m.get("link")
-    elif kind == "document":
-        doc = message.get("document") or {}
-        caption = doc.get("caption") or ""
-        extra = doc.get("filename") or "Dokument"
-        link = doc.get("link")
-    elif kind == "action" and (message.get("action") or {}).get("type") == "reaction":
-        emoji = (message.get("action") or {}).get("emoji") or ""
-        if not emoji:
-            return {"skip": True, "reason": "Reaction removed", "id": message.get("id")}
-        kind = "reaction"
-        caption = emoji
-    else:
-        caption = (message.get("text") or {}).get("body") or message.get("caption") or ""
-
-    text = message_text_from_parts(kind, caption, link, extra)
-    if not (text or "").strip():
-        text = f"[Mediennachricht: {kind}]"
-    return {
-        "id": message.get("id"),
-        "from_me": from_me,
-        "is_incoming": not from_me,
-        "remote_phone": remote_phone,
-        "local_phone": clean_phone(default_local_phone),
-        "type": kind,
-        "text": text,
-        "media_url": public_media_url(link),
-        "timestamp": message.get("timestamp"),
-        "instance": None,
-        "event": "legacy",
-    }
-
-
 def parse_webhook(payload: dict, default_local_phone: str = "") -> Optional[dict]:
-    if payload.get("messages"):
-        return parse_legacy_message(payload, default_local_phone)
-    if payload.get("event") or payload.get("data") or (payload.get("key") and payload.get("message")):
-        return parse_evolution_message(payload, default_local_phone)
-    return None
+    return parse_evolution_message(payload, default_local_phone)

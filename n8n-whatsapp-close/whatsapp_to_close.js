@@ -1,8 +1,7 @@
 /**
  * WhatsApp Webhook → Close Lead Activity (n8n Code-Node, JavaScript)
  *
- * Versteht Evolution API (send.message / messages.upsert) und das alte
- * Zapier-Format ({ messages: [...] }).
+ * Nur Evolution API: send.message / messages.upsert.
  *
  * n8n-Setup:
  *  1. Webhook-Node (POST), Response: Immediately
@@ -205,7 +204,7 @@ function evolutionContent(inner, messageType) {
 
 function parseEvolution(payload, defaultLocalPhone) {
   const event = payload.event;
-  if (event && !RELEVANT_EVENTS.includes(event)) return null;
+  if (!RELEVANT_EVENTS.includes(event)) return null;
 
   let data = payload.data || payload;
   if (Array.isArray(data)) data = data[0] || {};
@@ -230,7 +229,6 @@ function parseEvolution(payload, defaultLocalPhone) {
   const remotePhone = cleanPhone(String(remoteJid).split("@")[0]);
   return {
     id: msgId,
-    from_me: fromMe,
     is_incoming: !fromMe,
     remote_phone: remotePhone,
     local_phone: cleanPhone(defaultLocalPhone),
@@ -243,82 +241,15 @@ function parseEvolution(payload, defaultLocalPhone) {
   };
 }
 
-function parseLegacy(payload, defaultLocalPhone) {
-  const messages = payload.messages || [];
-  if (!messages.length) return null;
-  const message = messages[0];
-  const fromMe = Boolean(message.from_me);
-  const jid = fromMe ? message.chat_id || "" : message.from || message.chat_id || "";
-  if (isGroupOrBroadcast(jid)) return null;
-
-  const remotePhone = cleanPhone(String(jid).split("@")[0]);
-  let kind = message.type || "text";
-  let link = null;
-  let caption = "";
-  let extra = "";
-
-  if (kind === "text") {
-    caption = (message.text && message.text.body) || "";
-  } else if (kind === "image") {
-    caption = (message.image && message.image.caption) || "";
-    link = message.image && message.image.link;
-  } else if (kind === "video") {
-    caption = (message.video && message.video.caption) || "";
-    link = message.video && message.video.link;
-  } else if (kind === "audio" || kind === "voice") {
-    const payloadM = message[kind] || {};
-    link = payloadM.link;
-  } else if (kind === "document") {
-    caption = (message.document && message.document.caption) || "";
-    extra = (message.document && message.document.filename) || "Dokument";
-    link = message.document && message.document.link;
-  } else if (kind === "action" && message.action && message.action.type === "reaction") {
-    const emoji = message.action.emoji || "";
-    if (!emoji) return { skip: true, reason: "Reaction removed", id: message.id };
-    kind = "reaction";
-    caption = emoji;
-  } else if (kind === "group_invite") {
-    const inv = message.group_invite || {};
-    caption = (inv.body || "Gruppeneinladung") + (inv.url ? `\n${inv.url}` : "");
-    kind = "text";
-  } else {
-    caption = (message.text && message.text.body) || message.caption || "";
-  }
-
-  let text = messageTextFromParts(kind, caption, link, extra);
-  if (!String(text).trim()) text = `[Mediennachricht: ${kind}]`;
-
-  return {
-    id: message.id,
-    from_me: fromMe,
-    is_incoming: !fromMe,
-    remote_phone: remotePhone,
-    local_phone: cleanPhone(defaultLocalPhone),
-    type: kind,
-    text,
-    media_url: publicMediaUrl(link),
-    timestamp: message.timestamp,
-    instance: null,
-    event: "legacy",
-  };
-}
-
 function extractPayload(item) {
-  if (item.webhook_data) {
-    return typeof item.webhook_data === "string" ? JSON.parse(item.webhook_data) : item.webhook_data;
-  }
   if (item.body && typeof item.body === "object") return item.body;
   if (typeof item.body === "string") return JSON.parse(item.body);
-  if (item.event || item.data || item.messages) return item;
+  if (item.event && item.data) return item;
   return item;
 }
 
 function parseWebhook(payload, defaultLocalPhone) {
-  if (payload.messages) return parseLegacy(payload, defaultLocalPhone);
-  if (payload.event || payload.data || (payload.key && payload.message)) {
-    return parseEvolution(payload, defaultLocalPhone);
-  }
-  return null;
+  return parseEvolution(payload, defaultLocalPhone);
 }
 
 function resolveLocalPhone(instance, defaultNumber, mapJson) {

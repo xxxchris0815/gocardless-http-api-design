@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""WhatsApp webhook parsing tests (Evolution + legacy Zapier format)."""
+"""Evolution API WhatsApp webhook parsing tests."""
 
 import unittest
 from pathlib import Path
@@ -85,6 +85,19 @@ class EvolutionSampleTests(unittest.TestCase):
         self.assertNotIn("mmg.whatsapp.net", parsed["text"])
         self.assertIsNone(parsed["media_url"])
 
+    def test_empty_reaction_is_skipped(self):
+        payload = {
+            "event": "messages.upsert",
+            "data": {
+                "key": {"fromMe": False, "id": "rx1", "remoteJid": "49160@s.whatsapp.net"},
+                "message": {"reactionMessage": {"text": ""}},
+                "messageType": "reactionMessage",
+            },
+        }
+        parsed = parse_webhook(payload, "49")
+        self.assertTrue(parsed["skip"])
+        self.assertEqual(parsed["reason"], "Reaction removed")
+
     def test_skips_groups_and_status_events(self):
         group = {
             "event": "messages.upsert",
@@ -98,43 +111,20 @@ class EvolutionSampleTests(unittest.TestCase):
         self.assertTrue(is_relevant_event("send.message"))
         self.assertTrue(is_group_or_broadcast("status@broadcast"))
 
-
-class LegacyZapierTests(unittest.TestCase):
-    def test_incoming_text(self):
-        payload = {
+    def test_ignores_non_evolution_payloads(self):
+        zapier = {
             "messages": [
                 {
                     "id": "wamid.legacy",
                     "from_me": False,
                     "from": "491601865421@c.us",
-                    "chat_id": "491601865421@c.us",
                     "type": "text",
                     "text": {"body": "hallo"},
-                    "timestamp": 1787049466,
                 }
             ]
         }
-        parsed = parse_webhook(payload, "+49 175 8925279")
-        self.assertTrue(parsed["is_incoming"])
-        self.assertEqual(parsed["text"], "hallo")
-        self.assertEqual(parsed["local_phone"], "491758925279")
-
-    def test_reaction_removed_skips(self):
-        payload = {
-            "messages": [
-                {
-                    "id": "rx1",
-                    "from_me": False,
-                    "from": "49160@c.us",
-                    "type": "action",
-                    "action": {"type": "reaction"},
-                    "timestamp": 1,
-                }
-            ]
-        }
-        parsed = parse_webhook(payload, "49")
-        self.assertTrue(parsed["skip"])
-        self.assertEqual(parsed["reason"], "Reaction removed")
+        self.assertIsNone(parse_webhook(zapier, "49"))
+        self.assertIsNone(parse_webhook({"event": "connection.update", "data": {}}, "49"))
 
 
 class PhoneVariantTests(unittest.TestCase):
@@ -153,13 +143,16 @@ class MediaUrlTests(unittest.TestCase):
 
 
 class JsSmokeTests(unittest.TestCase):
-    def test_n8n_script_handles_evolution_and_close_activity(self):
+    def test_n8n_script_is_evolution_only(self):
         js = Path(__file__).with_name("whatsapp_to_close.js").read_text(encoding="utf-8")
         self.assertIn("send.message", js)
         self.assertIn("messages.upsert", js)
         self.assertIn("whatsapp_message", js)
         self.assertIn("external_whatsapp_message_id", js)
         self.assertIn("fromMe", js)
+        self.assertNotIn("parseLegacy", js)
+        self.assertNotIn("from_me", js)
+        self.assertNotIn("Zapier-Format", js)
 
 
 if __name__ == "__main__":

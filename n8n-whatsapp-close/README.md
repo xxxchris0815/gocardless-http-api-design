@@ -1,8 +1,6 @@
 # WhatsApp → Close Activity (n8n)
 
-Evolution-API-Webhooks (`send.message`, `messages.upsert`) werden zu Close WhatsApp-Activities. Incoming-Nachrichten erzeugen optional die Task „WhatsApp beantworten“.
-
-Das Zapier-Script erwartete `{ messages: [...] }`. Der aktuelle Webhook sieht so aus:
+Nur **Evolution API**. Webhooks `send.message` und `messages.upsert` werden zu Close WhatsApp-Activities. Incoming-Nachrichten erzeugen optional die Task „WhatsApp beantworten“.
 
 ```json
 {
@@ -17,7 +15,7 @@ Das Zapier-Script erwartete `{ messages: [...] }`. Der aktuelle Webhook sieht so
 }
 ```
 
-Beides wird verstanden. Gruppen (`@g.us`) und Broadcasts werden übersprungen.
+Andere Events (`connection.update`, Receipts, …) und das alte Zapier-Format `{ messages: [...] }` werden ignoriert. Gruppen (`@g.us`) und Broadcasts ebenfalls.
 
 ## Ablauf
 
@@ -26,12 +24,12 @@ Beides wird verstanden. Gruppen (`@g.us`) und Broadcasts werden übersprungen.
 3. **Config** — Close-Key und Nummern
 4. **Create Close WhatsApp Activity** — Lead suchen, Activity (idempotent über `external_whatsapp_message_id`), bei Incoming Task
 
-## Logik (wie Zapier)
+## Logik
 
 - Telefonvarianten: `49160…`, `+49160…`, `160…`, `0160…`
 - Incoming: zuständiger User aus letzter WA-/Call-History (ohne ausgeschlossene Nummer/User), sonst Custom Field
 - Outgoing: Close-User aus `/me/`
-- Medien: Caption + Markdown-Link. WhatsApp-CDN-URLs (`mmg.whatsapp.net`) werden nicht verlinkt — die sind verschlüsselt und laufen ab
+- Medien: Caption + Markdown-Link. WhatsApp-CDN-URLs (`mmg.whatsapp.net`) werden nicht verlinkt
 - Duplikate: gleiche `wamid` → skip
 
 ## Config
