@@ -10,6 +10,7 @@ from message_parse import (
     is_relevant_event,
     parse_webhook,
     phone_search_variants,
+    pick_responsible_user,
     public_media_url,
 )
 
@@ -167,6 +168,22 @@ class PhoneVariantTests(unittest.TestCase):
         self.assertIn("01601865421", variants)
 
 
+class ResponsibleUserTests(unittest.TestCase):
+    def test_custom_field_beats_history(self):
+        user, source = pick_responsible_user("user_FROM_CF", "user_EXCLUDED", "user_FROM_HISTORY")
+        self.assertEqual(user, "user_FROM_CF")
+        self.assertEqual(source, "custom_field")
+
+    def test_empty_custom_field_uses_history(self):
+        user, source = pick_responsible_user("", "user_EXCLUDED", "user_FROM_HISTORY")
+        self.assertEqual(user, "user_FROM_HISTORY")
+        self.assertEqual(source, "history")
+
+    def test_excluded_custom_field_falls_back_to_history(self):
+        user, source = pick_responsible_user("user_EXCLUDED", "user_EXCLUDED", "user_FROM_HISTORY")
+        self.assertEqual(user, "user_FROM_HISTORY")
+
+
 class MediaUrlTests(unittest.TestCase):
     def test_public_vs_cdn(self):
         self.assertIsNone(public_media_url("https://mmg.whatsapp.net/x"))
@@ -185,6 +202,9 @@ class JsSmokeTests(unittest.TestCase):
         self.assertNotIn("from_me", js)
         self.assertNotIn("Zapier-Format", js)
         self.assertIn("collectEvolutionPayloads", js)
+        self.assertNotIn("instance_phone_map", js)
+        self.assertNotIn("resolveLocalPhone", js)
+        self.assertIn("User via Custom Field", js)
 
 
 if __name__ == "__main__":

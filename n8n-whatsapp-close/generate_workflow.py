@@ -22,7 +22,6 @@ ASSIGNMENTS = [
     ("excluded_phone_number", "16416666880"),
     ("excluded_user_id", "user_JLZiYec3UhCAKchqWJLr3AMa3MeYlQeX2J0c0Ule6e0"),
     ("field_id_responsible_user", "cf_XNUTqdtJkSXJIt2XdfS61YyinahAvTWplVfvI8qMZkK"),
-    ("instance_phone_map", '{"WA-B1":"491758925279"}'),
 ]
 
 UNWRAP_JS = """function collect(raw, depth) {
@@ -143,7 +142,7 @@ workflow = {
             "type": "n8n-nodes-base.set",
             "typeVersion": 3.4,
             "position": [920, 300],
-            "notes": "close_api_key eintragen. instance_phone_map mappt Evolution-Instanz auf die lokale WA-Nummer.",
+            "notes": "close_api_key und my_whatsapp_number eintragen. Custom Field für den zuständigen User hat Vorrang vor der History.",
         },
         {
             "parameters": {

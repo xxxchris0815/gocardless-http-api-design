@@ -260,6 +260,21 @@ def collect_evolution_payloads(raw: Any, depth: int = 0) -> list[dict]:
     return found
 
 
+def pick_responsible_user(
+    custom_field_user: Optional[str],
+    excluded_user_id: str,
+    history_user: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    """Custom Field wins when set (and not excluded); otherwise WA/call history."""
+    cf = (custom_field_user or "").strip() or None
+    excluded = (excluded_user_id or "").strip()
+    if cf and cf != excluded:
+        return cf, "custom_field"
+    if history_user:
+        return history_user, "history"
+    return None, None
+
+
 def parse_webhook(payload: dict, default_local_phone: str = "") -> Optional[dict]:
     bodies = collect_evolution_payloads(payload)
     if not bodies:

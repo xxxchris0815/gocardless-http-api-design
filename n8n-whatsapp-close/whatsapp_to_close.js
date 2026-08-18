@@ -11,8 +11,7 @@
  *
  * Config:
  *  close_api_key, my_whatsapp_number, create_task,
- *  excluded_phone_number, excluded_user_id, field_id_responsible_user,
- *  instance_phone_map (JSON, optional)
+ *  excluded_phone_number, excluded_user_id, field_id_responsible_user
  */
 
 const RELEVANT_EVENTS = ["send.message", "messages.upsert"];
@@ -279,16 +278,6 @@ function parseWebhook(payload, defaultLocalPhone) {
   return parseEvolution(payload, defaultLocalPhone);
 }
 
-function resolveLocalPhone(instance, defaultNumber, mapJson) {
-  try {
-    const map = typeof mapJson === "string" ? JSON.parse(mapJson || "{}") : mapJson || {};
-    if (instance && map[instance]) return cleanPhone(map[instance]);
-  } catch (e) {
-    /* ignore */
-  }
-  return cleanPhone(defaultNumber);
-}
-
 function isoFromTimestamp(ts, fallbackIso) {
   if (ts === undefined || ts === null || ts === "") {
     return fallbackIso || new Date().toISOString();
@@ -369,8 +358,7 @@ async function main() {
     .trim()
     .replace(/^custom\./, "");
   const shouldCreateTask = pickBool("create_task", "WA_CREATE_TASK", true);
-  const defaultNumber = pick("my_whatsapp_number", "MY_WHATSAPP_NUMBER", "491758925279");
-  const instanceMap = pick("instance_phone_map", "WA_INSTANCE_PHONE_MAP", "{}");
+  const localPhone = cleanPhone(pick("my_whatsapp_number", "MY_WHATSAPP_NUMBER", "491758925279"));
 
   let payloads = [];
   try {
@@ -398,7 +386,6 @@ async function main() {
   }
 
   const payload = uniquePayloads[0];
-  const localPhone = resolveLocalPhone(payload.instance, defaultNumber, instanceMap);
   const parsed = parseWebhook(payload, localPhone);
   if (!parsed) {
     return result({
@@ -500,17 +487,17 @@ async function main() {
   const currentUserId = parsed.is_incoming ? null : await getCurrentUser();
   let responsibleUserId = null;
   if (parsed.is_incoming) {
-    const hist = await findResponsibleUserFromHistory(leadId);
-    if (hist) {
-      responsibleUserId = hist.userId;
-      log(`Step 5: User via ${hist.source} (${responsibleUserId})`);
+    const cfUser = getCustomFieldValue(lead, responsibleField);
+    if (cfUser && cfUser !== excludedUserId) {
+      responsibleUserId = cfUser;
+      log(`Step 5: User via Custom Field (${responsibleUserId})`);
     } else {
-      const cfUser = getCustomFieldValue(lead, responsibleField);
-      if (cfUser && cfUser !== excludedUserId) {
-        responsibleUserId = cfUser;
-        log(`Step 5: User via Custom Field (${responsibleUserId})`);
+      const hist = await findResponsibleUserFromHistory(leadId);
+      if (hist) {
+        responsibleUserId = hist.userId;
+        log(`Step 5: User via ${hist.source} (${responsibleUserId})`);
       } else {
-        log("Step 5: Kein zuständiger User (History & Custom Field leer/excluded)");
+        log("Step 5: Kein zuständiger User (Custom Field leer/excluded, History leer)");
       }
     }
   }

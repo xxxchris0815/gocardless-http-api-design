@@ -43,7 +43,7 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 ## Logik
 
 - Telefonvarianten: `49160…`, `+49160…`, `160…`, `0160…`
-- Incoming: zuständiger User aus letzter WA-/Call-History (ohne ausgeschlossene Nummer/User), sonst Custom Field
+- Incoming: zuständiger User zuerst aus dem Custom Field, sonst WA-/Call-History
 - Outgoing: Close-User aus `/me/`
 - Medien: Caption + Markdown-Link. WhatsApp-CDN-URLs (`mmg.whatsapp.net`) werden nicht verlinkt
 - Duplikate: gleiche `wamid` → skip
@@ -53,11 +53,10 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 | Feld | Bedeutung |
 | --- | --- |
 | `close_api_key` | Close API-Key (nicht committen) |
-| `my_whatsapp_number` | lokale Nummer ohne `+` |
-| `instance_phone_map` | JSON, z. B. `{"WA-B1":"491758925279"}` |
+| `my_whatsapp_number` | lokale WhatsApp-Nummer ohne `+` (steht in Close als `local_phone`) |
 | `create_task` | `true`/`false` |
-| `excluded_phone_number` / `excluded_user_id` | History-Filter |
-| `field_id_responsible_user` | Close Custom Field für den zuständigen User |
+| `excluded_phone_number` / `excluded_user_id` | History-Filter, falls das Custom Field leer ist |
+| `field_id_responsible_user` | Close Custom Field auf dem Lead; wenn gesetzt, hat es Vorrang vor der History |
 
 Import: `WhatsApp_Close_Activity.json`. Evolution zeigt auf die Production-URL (`whatsapp-close`).
 
