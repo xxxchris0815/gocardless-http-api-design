@@ -115,6 +115,54 @@ class EvolutionSampleTests(unittest.TestCase):
         self.assertTrue(is_relevant_event("send.message"))
         self.assertTrue(is_group_or_broadcast("status@broadcast"))
 
+    def test_incoming_voice_note_n8n_wrapper(self):
+        wrapped = [
+            {
+                "headers": {"host": "automation.orgasmic.live"},
+                "params": {},
+                "query": {},
+                "body": {
+                    "event": "messages.upsert",
+                    "instance": "WA-Business_Alexandra",
+                    "data": {
+                        "key": {
+                            "remoteJid": "491601865421@s.whatsapp.net",
+                            "fromMe": False,
+                            "id": "3EB0555C13E55CF32997DB",
+                        },
+                        "message": {
+                            "audioMessage": {
+                                "url": "https://mmg.whatsapp.net/v/t62.encrypted",
+                                "mimetype": "audio/ogg; codecs=opus",
+                                "seconds": 8,
+                                "ptt": True,
+                                "mediaKey": {"0": 74, "1": 50, "2": 13},
+                            }
+                        },
+                        "messageType": "audioMessage",
+                        "messageTimestamp": 1787071507,
+                    },
+                    "server_url": "https://wa.orgasmic.live",
+                    "sender": "14087093943@s.whatsapp.net",
+                    "apikey": "REDACTED",
+                },
+            }
+        ]
+        found = collect_evolution_payloads(wrapped)
+        self.assertEqual(len(found), 1)
+        parsed = parse_webhook(found[0], "491758925279")
+        self.assertTrue(parsed["is_incoming"])
+        self.assertEqual(parsed["type"], "voice")
+        self.assertEqual(parsed["remote_phone"], "491601865421")
+        self.assertEqual(parsed["local_phone"], "14087093943")
+        self.assertEqual(parsed["instance"], "WA-Business_Alexandra")
+        self.assertEqual(parsed["server_url"], "https://wa.orgasmic.live")
+        self.assertIn("Sprachnachricht empfangen", parsed["text"])
+        self.assertIn("8s", parsed["text"])
+        self.assertNotIn("mmg.whatsapp.net", parsed["text"])
+        self.assertTrue(needs_media_upload(parsed["type"]))
+        self.assertIsNone(parsed["media_url"])
+
     def test_n8n_webhook_wrapper_array(self):
         wrapped = [
             {
@@ -223,6 +271,8 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("files/upload", js)
         self.assertIn("attachments", js)
         self.assertIn("evolution_base_url", js)
+        self.assertIn("server_url", js)
+        self.assertIn("normalizeForEvolution", js)
 
 
 if __name__ == "__main__":

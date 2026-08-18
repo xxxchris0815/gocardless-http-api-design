@@ -51,8 +51,21 @@ for (const item of $input.all()) {
   const payloads = collect(item.json);
   for (const p of payloads) {
     const body = Object.assign({}, p);
+    const evoKey = body.apikey;
+    const serverUrl = body.server_url;
+    const sender = body.sender;
     delete body.apikey;
-    out.push({ json: { body: body, event: body.event, instance: body.instance, data: body.data } });
+    out.push({
+      json: {
+        body: body,
+        event: body.event,
+        instance: body.instance,
+        data: body.data,
+        server_url: serverUrl,
+        sender: sender,
+        _evo_apikey: evoKey || "",
+      },
+    });
   }
 }
 return out;

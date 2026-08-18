@@ -163,7 +163,8 @@ def message_text_from_parts(kind: str, caption: str, link: Optional[str], extra:
         body = caption or "🎥 Video empfangen"
         return f"{body}{_create_media_link(link, '▶️', 'Video ansehen')}"
     if kind in ("audio", "voice"):
-        return f"🎤 Sprachnachricht empfangen{_create_media_link(link, '▶️', 'Abspielen')}"
+        dur = f" ({extra})" if extra else ""
+        return f"🎤 Sprachnachricht empfangen{dur}{_create_media_link(link, '▶️', 'Abspielen')}"
     if kind == "document":
         body = caption or "📄 Dokument empfangen"
         filename = extra or "Dokument"
@@ -213,7 +214,9 @@ def parse_evolution_message(payload: dict, default_local_phone: str) -> Optional
         text = f"[Mediennachricht: {kind or message_type or 'unknown'}]"
 
     remote_phone = clean_phone(remote_jid.split("@")[0] if "@" in remote_jid else remote_jid)
-    local_phone = clean_phone(default_local_phone)
+    sender = payload.get("sender") or ""
+    sender_phone = clean_phone(sender.split("@")[0] if "@" in sender else sender)
+    local_phone = sender_phone or clean_phone(default_local_phone)
     ts = data.get("messageTimestamp") or data.get("messageTimestamp")
     return {
         "id": msg_id,
@@ -226,6 +229,7 @@ def parse_evolution_message(payload: dict, default_local_phone: str) -> Optional
         "timestamp": ts,
         "instance": payload.get("instance"),
         "event": event,
+        "server_url": payload.get("server_url") or "",
     }
 
 
@@ -244,7 +248,12 @@ def _evolution_content(inner: dict, message_type: str) -> tuple[str, str, Option
     if "audioMessage" in inner:
         aud = inner["audioMessage"] or {}
         kind = "voice" if aud.get("ptt") else "audio"
-        return kind, "", aud.get("url") or aud.get("mediaUrl"), ""
+        try:
+            secs = int(float(aud.get("seconds") or 0))
+        except (TypeError, ValueError):
+            secs = 0
+        extra = f"{secs}s" if secs > 0 else ""
+        return kind, "", aud.get("url") or aud.get("mediaUrl"), extra
     if "documentMessage" in inner:
         doc = inner["documentMessage"] or {}
         return (

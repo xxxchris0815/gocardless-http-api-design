@@ -163,6 +163,54 @@ function filenameForMedia(kind, mime, given) {
   return `${prefix}.${ext}`;
 }
 
+function jidToPhone(jid) {
+  return cleanPhone(String(jid || "").split("@")[0]);
+}
+
+function isNumericKeyedObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  return keys.length > 0 && keys.every((k) => /^\d+$/.test(k));
+}
+
+function numericKeyedToBase64(value) {
+  const keys = Object.keys(value).map(Number);
+  const max = Math.max.apply(null, keys);
+  const buf = Buffer.alloc(max + 1);
+  keys.forEach((idx) => {
+    buf[idx] = Number(value[String(idx)]) & 255;
+  });
+  return buf.toString("base64");
+}
+
+function isLongObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const keys = Object.keys(value);
+  if (!keys.length || !Object.prototype.hasOwnProperty.call(value, "low")) return false;
+  return keys.every((k) => k === "low" || k === "high" || k === "unsigned");
+}
+
+function longToNumber(value) {
+  const low = Number(value.low) >>> 0;
+  const high = Number(value.high) || 0;
+  if (!high) return value.unsigned ? low : low | 0;
+  return high * 0x100000000 + low;
+}
+
+function normalizeForEvolution(node) {
+  if (node === undefined || node === null) return node;
+  if (typeof Buffer !== "undefined" && Buffer.isBuffer(node)) return node.toString("base64");
+  if (Array.isArray(node)) return node.map(normalizeForEvolution);
+  if (typeof node !== "object") return node;
+  if (isLongObject(node)) return longToNumber(node);
+  if (isNumericKeyedObject(node)) return numericKeyedToBase64(node);
+  const out = {};
+  Object.keys(node).forEach((key) => {
+    out[key] = normalizeForEvolution(node[key]);
+  });
+  return out;
+}
+
 function decodeEvolutionBase64(data) {
   if (!data) return null;
   let payload = data;
@@ -258,7 +306,8 @@ function messageTextFromParts(kind, caption, link, extra) {
     return `${body}${createMediaLink(link, "▶️", "Video ansehen")}`;
   }
   if (kind === "audio" || kind === "voice") {
-    return `🎤 Sprachnachricht empfangen${createMediaLink(link, "▶️", "Abspielen")}`;
+    const dur = extra ? ` (${extra})` : "";
+    return `🎤 Sprachnachricht empfangen${dur}${createMediaLink(link, "▶️", "Abspielen")}`;
   }
   if (kind === "document") {
     const body = caption || "📄 Dokument empfangen";
@@ -315,11 +364,12 @@ function evolutionContent(inner, messageType) {
   }
   if (inner.audioMessage) {
     const aud = inner.audioMessage;
+    const secs = Number(aud.seconds);
     return {
       kind: aud.ptt ? "voice" : "audio",
       caption: "",
       link: aud.url || aud.mediaUrl || null,
-      extra: "",
+      extra: Number.isFinite(secs) && secs > 0 ? `${Math.round(secs)}s` : "",
       mimetype: aud.mimetype || "audio/ogg",
       filename: "",
     };
@@ -407,12 +457,13 @@ function parseEvolution(payload, defaultLocalPhone) {
     text = `[Mediennachricht: ${kind || data.messageType || "unknown"}]`;
   }
 
-  const remotePhone = cleanPhone(String(remoteJid).split("@")[0]);
+  const remotePhone = jidToPhone(remoteJid);
+  const senderPhone = jidToPhone(payload.sender);
   return {
     id: msgId,
     is_incoming: !fromMe,
     remote_phone: remotePhone,
-    local_phone: cleanPhone(defaultLocalPhone),
+    local_phone: senderPhone || cleanPhone(defaultLocalPhone),
     type: kind,
     text,
     media_url: publicMediaUrl(link),
@@ -421,6 +472,7 @@ function parseEvolution(payload, defaultLocalPhone) {
     event,
     mimetype: mimetype || "",
     filename: filename || "",
+    server_url: payload.server_url || "",
     raw_key: key,
     raw_message: data.message || {},
   };
@@ -589,34 +641,57 @@ function normalizeEvolutionBase(url) {
 function pickEvolutionApiKeyFromWebhook() {
   const items = jsonFromNode("WhatsApp Webhook");
   for (const it of items) {
-    const k = (it && it.body && it.body.apikey) || (it && it.apikey);
+    const k = (it && it.body && it.body.apikey) || (it && it.apikey) || (it && it._evo_apikey);
     if (k) return String(k).trim();
   }
   return "";
 }
 
+function pickEvolutionBase(payload) {
+  return normalizeEvolutionBase(
+    pick("evolution_base_url", "EVOLUTION_BASE_URL", "") ||
+      (payload && payload.server_url) ||
+      inputItem.server_url ||
+      (inputItem.body && inputItem.body.server_url) ||
+      ""
+  );
+}
+
+function pickEvolutionKey(payload) {
+  return (
+    String(pick("evolution_api_key", "EVOLUTION_API_KEY", "")).trim() ||
+    String((payload && payload.apikey) || "").trim() ||
+    String(inputItem._evo_apikey || "").trim() ||
+    pickEvolutionApiKeyFromWebhook()
+  );
+}
+
 async function fetchEvolutionMedia({ baseUrl, apiKey, instance, key, message }) {
   const inst = encodeURIComponent(instance);
   const headers = { apikey: apiKey, Accept: "application/json", "Content-Type": "application/json" };
-  const body = {
-    message: {
-      key: {
-        id: key && key.id,
-        remoteJid: key && key.remoteJid,
-        fromMe: Boolean(key && key.fromMe),
-      },
-      message,
-    },
-    convertToMp4: false,
+  const keyOnly = {
+    id: key && key.id,
+    remoteJid: key && key.remoteJid,
+    fromMe: Boolean(key && key.fromMe),
   };
+  const bodies = [
+    { message: { key: keyOnly }, convertToMp4: false },
+    { message: { key: keyOnly }, convertToMp4: true },
+    {
+      message: { key: keyOnly, message: normalizeForEvolution(message) },
+      convertToMp4: false,
+    },
+  ];
   const paths = [`/chat/getBase64FromMediaMessage/${inst}`, `/message/getBase64FromMediaMessage/${inst}`];
   let last = null;
   for (const p of paths) {
-    const res = await httpJson("POST", `${baseUrl}${p}`, { headers, body, timeout: 60000 });
-    last = res;
-    if (res.status >= 200 && res.status < 300) {
-      const decoded = decodeEvolutionBase64(res.data);
-      if (decoded) return decoded;
+    for (const body of bodies) {
+      const res = await httpJson("POST", `${baseUrl}${p}`, { headers, body, timeout: 60000 });
+      last = res;
+      if (res.status >= 200 && res.status < 300) {
+        const decoded = decodeEvolutionBase64(res.data);
+        if (decoded) return decoded;
+      }
     }
   }
   const errDetail =
@@ -687,9 +762,6 @@ async function main() {
     .replace(/^custom\./, "");
   const shouldCreateTask = pickBool("create_task", "WA_CREATE_TASK", true);
   const localPhone = cleanPhone(pick("my_whatsapp_number", "MY_WHATSAPP_NUMBER", "491758925279"));
-  const evolutionBase = normalizeEvolutionBase(pick("evolution_base_url", "EVOLUTION_BASE_URL", ""));
-  const evolutionKey =
-    String(pick("evolution_api_key", "EVOLUTION_API_KEY", "")).trim() || pickEvolutionApiKeyFromWebhook();
   const shouldUploadMedia = pickBool("upload_media", "WA_UPLOAD_MEDIA", true);
 
   let payloads = [];
@@ -731,6 +803,9 @@ async function main() {
   if (parsed.skip) {
     return result({ success: true, action: "skipped", reason: parsed.reason, message_id: parsed.id });
   }
+
+  const evolutionBase = pickEvolutionBase(payload);
+  const evolutionKey = pickEvolutionKey(payload);
 
   log(`Step 1: ${parsed.is_incoming ? "incoming" : "outgoing"} ${parsed.remote_phone} (${parsed.type})`);
 

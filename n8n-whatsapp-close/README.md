@@ -45,7 +45,7 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 - Telefonvarianten: `49160…`, `+49160…`, `160…`, `0160…`
 - Incoming: zuständiger User zuerst aus dem Custom Field, sonst WA-/Call-History
 - Outgoing: Close-User aus `/me/`
-- Bilder, Voice Notes, Audio, Video, Dokumente, Sticker: Evolution `POST /chat/getBase64FromMediaMessage/{instance}`, dann Close Files-API, dann Activity-`attachments`. Ohne Evolution-URL bleibt nur der Textplatzhalter
+- Bilder, Voice Notes, Audio, Video, Dokumente, Sticker: Evolution `POST /chat/getBase64FromMediaMessage/{instance}`, dann Close Files-API, dann Activity-`attachments`. `server_url` und `apikey` aus dem Webhook reichen; Config nur als Override
 - WhatsApp-CDN-URLs (`mmg.whatsapp.net`) werden nicht als Markdown verlinkt
 - Duplikate: gleiche `wamid` → skip (vor dem Media-Download)
 
