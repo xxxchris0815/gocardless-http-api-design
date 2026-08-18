@@ -157,6 +157,18 @@ function closeAuthHeader(apiKey) {
   return `Basic ${token}`;
 }
 
+function closeKeyLooksHashed(apiKey) {
+  const key = String(apiKey || "").trim();
+  if (!key) return false;
+  if (key.includes("*")) return true;
+  if (/^[0-9a-f]{32,64}$/i.test(key)) return true;
+  if (/^\$2[aby]\$/.test(key)) return true;
+  return false;
+}
+
+const CLOSE_KEY_HINT =
+  "In Close: Settings → Developer → API Keys. Den Klartext-Key verwenden (beginnt mit api_), nicht den gehashten Key/Fingerprint aus der Liste.";
+
 async function httpJson(method, url, { headers = {}, body } = {}) {
   const options = {
     method,
@@ -222,6 +234,9 @@ async function main() {
   if (!closeApiKey) {
     return result("error", { msg: "API Key fehlt" });
   }
+  if (closeKeyLooksHashed(closeApiKey)) {
+    return result("error", { msg: `close_api_key sieht gehasht/maskiert aus. ${CLOSE_KEY_HINT}` });
+  }
 
   let invoice;
   try {
@@ -265,6 +280,12 @@ async function main() {
     if (getRes.status === 200 && getRes.data) {
       currentDepositDate = readCustomField(getRes.data, fieldIdDeposit);
       log(`   Anzahlungsdatum bisher: ${currentDepositDate || "(leer)"}`);
+    } else if (getRes.status === 401 || getRes.status === 403) {
+      return result("error", {
+        msg: `Close API-Key ungültig (HTTP ${getRes.status}). ${CLOSE_KEY_HINT}`,
+        opp_id: oppId,
+        http_status: getRes.status,
+      });
     } else {
       log(`GET Error: ${JSON.stringify(getRes.data)}`);
     }
@@ -288,6 +309,13 @@ async function main() {
 
   try {
     const putRes = await httpJson("PUT", url, { headers, body: payload });
+    if (putRes.status === 401 || putRes.status === 403) {
+      return result("error", {
+        msg: `Close API-Key ungültig (HTTP ${putRes.status}). ${CLOSE_KEY_HINT}`,
+        opp_id: oppId,
+        http_status: putRes.status,
+      });
+    }
     if (putRes.status !== 200) {
       return result("error", {
         msg: putRes.data,

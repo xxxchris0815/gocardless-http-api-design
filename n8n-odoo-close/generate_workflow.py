@@ -96,7 +96,7 @@ workflow = {
             "type": "n8n-nodes-base.set",
             "typeVersion": 3.4,
             "position": [720, 300],
-            "notes": "close_api_key hier eintragen (oder CLOSE_API_KEY als n8n-Environment). Field/Status-IDs stammen aus Zapier.",
+            "notes": "close_api_key = Klartext-Key (api_…), nicht der Hash aus der Close-UI (oder CLOSE_API_KEY als n8n-Environment). Field/Status-IDs stammen aus Zapier.",
         },
         {
             "parameters": {

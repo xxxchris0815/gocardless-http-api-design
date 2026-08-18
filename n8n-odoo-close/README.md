@@ -21,7 +21,7 @@ Das Zapier-Feld `field_id_residual` war `custom.cf_…`. Beim PUT wird das Präf
 ## n8n einrichten
 
 1. `Odoo_Close_Invoice_Status.json` importieren.
-2. In **Config** den Close API-Key eintragen (`close_api_key`). Field- und Status-IDs sind schon aus Zapier übernommen.
+2. In **Config** den Close **Klartext**-API-Key eintragen (`close_api_key`, beginnt mit `api_` — nicht den Hash aus der Close-UI). Field- und Status-IDs sind schon aus Zapier übernommen.
 3. Production-Webhook-URL in Odoo (Automation auf `account.move`) eintragen. Payload wie:
 
 ```json

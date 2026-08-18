@@ -52,7 +52,7 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 
 | Feld | Bedeutung |
 | --- | --- |
-| `close_api_key` | Close API-Key (nicht committen) |
+| `close_api_key` | Close **Klartext**-API-Key (beginnt mit `api_`). Nicht den Hash/Fingerprint aus der Key-Liste. Nicht committen. |
 | `my_whatsapp_number` | lokale WhatsApp-Nummer ohne `+` (steht in Close als `local_phone`) |
 | `create_task` | `true`/`false` |
 | `excluded_phone_number` / `excluded_user_id` | History-Filter, falls das Custom Field leer ist |

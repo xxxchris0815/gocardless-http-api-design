@@ -144,7 +144,7 @@ workflow = {
             "type": "n8n-nodes-base.set",
             "typeVersion": 2,
             "position": [920, 300],
-            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). close_api_key und my_whatsapp_number eintragen.",
+            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). close_api_key = Klartext-Key (api_…), nicht der Hash aus der Close-UI.",
         },
         {
             "parameters": {

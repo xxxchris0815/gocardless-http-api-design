@@ -71,11 +71,27 @@ function pickBool(key, envKey, fallback = true) {
   return Boolean(fallback);
 }
 
+const CLOSE_KEY_HINT =
+  "In Close: Settings → Developer → API Keys. Den Klartext-Key verwenden (beginnt mit api_), nicht den gehashten Key/Fingerprint aus der Liste.";
+
 function closeAuthHeader(apiKey) {
   const key = String(apiKey || "").trim();
   if (!key) return "";
   if (/^basic\s+/i.test(key)) return key;
   return `Basic ${Buffer.from(`${key}:`, "utf8").toString("base64")}`;
+}
+
+function closeKeyLooksHashed(apiKey) {
+  const key = String(apiKey || "").trim();
+  if (!key || /^basic\s+/i.test(key)) return false;
+  if (key.includes("*")) return true;
+  if (/^[0-9a-f]{32,64}$/i.test(key)) return true;
+  if (/^\$2[aby]\$/.test(key)) return true;
+  return false;
+}
+
+function closeAuthFailed(status) {
+  return status === 401 || status === 403;
 }
 
 function cleanPhone(phone) {
@@ -403,6 +419,12 @@ async function main() {
   if (!closeApiKey) {
     return result({ success: false, error: "close_api_key fehlt" });
   }
+  if (closeKeyLooksHashed(closeApiKey)) {
+    return result({
+      success: false,
+      error: `close_api_key sieht gehasht/maskiert aus. ${CLOSE_KEY_HINT}`,
+    });
+  }
 
   const excludedPhone = cleanPhone(pick("excluded_phone_number", "WA_EXCLUDED_PHONE", "16416666880"));
   const excludedUserId = String(
@@ -457,6 +479,15 @@ async function main() {
   }
 
   log(`Step 1: ${parsed.is_incoming ? "incoming" : "outgoing"} ${parsed.remote_phone} (${parsed.type})`);
+
+  const meProbe = await httpJson("GET", "https://api.close.com/api/v1/me/", { headers: closeHeaders });
+  if (closeAuthFailed(meProbe.status)) {
+    return result({
+      success: false,
+      error: `Close API-Key ungültig (HTTP ${meProbe.status}). ${CLOSE_KEY_HINT}`,
+      close_status: meProbe.status,
+    });
+  }
 
   async function getCurrentUser() {
     try {
@@ -537,6 +568,10 @@ async function main() {
           _fields: "id,display_name,organization_id,contacts,custom",
         },
       });
+      if (closeAuthFailed(leadRes.status)) {
+        attempts.push({ endpoint: "lead", query: q, status: leadRes.status, hits: 0 });
+        return { lead: null, attempts, authStatus: leadRes.status };
+      }
       const leadHits = leadRes.data && Array.isArray(leadRes.data.data) ? leadRes.data.data.length : 0;
       attempts.push({ endpoint: "lead", query: q, status: leadRes.status, hits: leadHits });
       if (leadRes.status === 200 && leadHits) {
@@ -556,6 +591,10 @@ async function main() {
           _fields: "id,lead_id,phones,display_name",
         },
       });
+      if (closeAuthFailed(contactRes.status)) {
+        attempts.push({ endpoint: "contact", query: q, status: contactRes.status, hits: 0 });
+        return { lead: null, attempts, authStatus: contactRes.status };
+      }
       const contactHits =
         contactRes.data && Array.isArray(contactRes.data.data) ? contactRes.data.data.length : 0;
       attempts.push({ endpoint: "contact", query: q, status: contactRes.status, hits: contactHits });
@@ -576,6 +615,14 @@ async function main() {
   }
 
   const found = await searchLeadByPhone(parsed.remote_phone);
+  if (found.authStatus) {
+    return result({
+      success: false,
+      error: `Close API-Key ungültig (HTTP ${found.authStatus}). ${CLOSE_KEY_HINT}`,
+      close_status: found.authStatus,
+      search_attempts: found.attempts,
+    });
+  }
   if (!found.lead) {
     return result({
       success: false,
