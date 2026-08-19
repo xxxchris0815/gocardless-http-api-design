@@ -19,7 +19,7 @@ REC_SERVE_ID = "bd7d67e8-9f01-4234-abcd-3ef012345714"
 
 ASSIGNMENTS = [
     ("close_api_key", ""),
-    ("my_whatsapp_number", "491758925279"),
+    ("my_whatsapp_number", ""),
     ("create_task", "true"),
     ("excluded_phone_number", "16416666880"),
     ("excluded_user_id", "user_JLZiYec3UhCAKchqWJLr3AMa3MeYlQeX2J0c0Ule6e0"),
@@ -206,7 +206,7 @@ workflow = {
             "type": "n8n-nodes-base.set",
             "typeVersion": 2,
             "position": [920, 300],
-            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). close_api_key = Klartext-Key (api_…). Für Bilder/Voice: evolution_base_url + evolution_api_key.",
+            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). close_api_key = Klartext-Key (api_…). Die lokale WhatsApp-Nummer kommt von Evolution fetchInstances; my_whatsapp_number nur als Fallback.",
         },
         {
             "parameters": {

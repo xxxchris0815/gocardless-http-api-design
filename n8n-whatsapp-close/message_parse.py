@@ -61,6 +61,40 @@ def clean_phone(phone: Optional[str]) -> str:
     return re.sub(r"\D", "", str(phone))
 
 
+def jid_to_phone(jid: Optional[str]) -> str:
+    local = str(jid or "").split("@")[0]
+    local = local.split(":")[0]
+    return clean_phone(local)
+
+
+def phone_from_instance_info(data: Any, instance_name: str = "") -> str:
+    """Extract the connected WhatsApp number from Evolution fetchInstances."""
+    want = (instance_name or "").lower()
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        rows = data["instance"] if isinstance(data.get("instance"), list) else [data]
+    else:
+        rows = []
+    fallback = ""
+    for row in rows:
+        inst = row.get("instance") if isinstance(row, dict) and isinstance(row.get("instance"), dict) else row
+        if not isinstance(inst, dict):
+            continue
+        name = str(inst.get("instanceName") or inst.get("name") or "").lower()
+        owner = inst.get("owner") or inst.get("ownerJid") or inst.get("wuid") or inst.get("wid") or inst.get("number") or ""
+        phone = jid_to_phone(owner) or clean_phone(inst.get("number"))
+        if not phone:
+            continue
+        if want and name and name != want:
+            continue
+        if want and name == want:
+            return phone
+        if not fallback:
+            fallback = phone
+    return fallback
+
+
 def phone_search_variants(remote_phone: str) -> list[str]:
     digits = clean_phone(remote_phone)
     if not digits:
@@ -243,9 +277,8 @@ def parse_evolution_message(payload: dict, default_local_phone: str) -> Optional
             return {"skip": True, "reason": "Reaction removed", "id": msg_id}
         text = f"[Mediennachricht: {kind or message_type or 'unknown'}]"
 
-    remote_phone = clean_phone(remote_jid.split("@")[0] if "@" in remote_jid else remote_jid)
-    sender = payload.get("sender") or ""
-    sender_phone = clean_phone(sender.split("@")[0] if "@" in sender else sender)
+    remote_phone = jid_to_phone(remote_jid)
+    sender_phone = jid_to_phone(payload.get("sender") or "")
     local_phone = sender_phone or clean_phone(default_local_phone)
     ts = data.get("messageTimestamp") or data.get("messageTimestamp")
     duration = 0

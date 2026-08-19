@@ -10,8 +10,10 @@ from message_parse import (
     is_close_app_file_url,
     is_group_or_broadcast,
     is_relevant_event,
+    jid_to_phone,
     needs_media_upload,
     parse_webhook,
+    phone_from_instance_info,
     phone_search_variants,
     pick_responsible_user,
     public_media_url,
@@ -252,6 +254,29 @@ class PhoneVariantTests(unittest.TestCase):
         variants = phone_search_variants("491601865421")
         self.assertEqual(variants, ["491601865421", "+491601865421", "1601865421", "01601865421"])
 
+    def test_jid_strips_device_suffix(self):
+        self.assertEqual(jid_to_phone("14087093943:12@s.whatsapp.net"), "14087093943")
+        self.assertEqual(jid_to_phone("491758925279@s.whatsapp.net"), "491758925279")
+
+
+class EvolutionInstancePhoneTests(unittest.TestCase):
+    def test_owner_jid_for_named_instance(self):
+        payload = [
+            {
+                "instance": {
+                    "instanceName": "WA-Business_Alexandra",
+                    "owner": "14087093943@s.whatsapp.net",
+                    "status": "open",
+                }
+            },
+            {"instance": {"instanceName": "other", "owner": "491111111111@s.whatsapp.net"}},
+        ]
+        self.assertEqual(phone_from_instance_info(payload, "WA-Business_Alexandra"), "14087093943")
+
+    def test_flat_v2_number_field(self):
+        payload = [{"name": "WA-B1", "number": "491758925279", "ownerJid": "491758925279:1@s.whatsapp.net"}]
+        self.assertEqual(phone_from_instance_info(payload, "WA-B1"), "491758925279")
+
 
 class ResponsibleUserTests(unittest.TestCase):
     def test_custom_field_beats_history(self):
@@ -353,6 +378,9 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("created_by", js)
         self.assertIn("Sprachdatei abspielen", js)
         self.assertIn("hint_activity_id", js)
+        self.assertIn("fetchInstances", js)
+        self.assertIn("phoneFromInstanceInfo", js)
+        self.assertIn("fetchEvolutionInstancePhone", js)
 
 
 if __name__ == "__main__":

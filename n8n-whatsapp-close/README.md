@@ -37,15 +37,23 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 
 ## Ablauf
 
-1. **WhatsApp Webhook** — POST, antwortet sofort
+1. **WhatsApp Webhook** (POST `/whatsapp-close`) — Evolution schickt Nachrichten hierhin. Antwortet sofort mit 200, damit Evolution nicht in Timeouts läuft.
 2. **Unwrap Evolution Body** — holt `event`/`data` aus n8n-`headers`+`body`-Arrays
 3. **Message Events Only** — nur `send.message` und `messages.upsert`
-4. **Config** — Close-Key und Nummern
-5. **Create Close WhatsApp Activity** — Lead suchen, Activity, bei Incoming Task
-6. **Close Recording Download** (GET, eigener Trigger) — liefert Close die Audiodatei
+4. **Config** — Close-Key (die WhatsApp-Nummer kommt von Evolution)
+5. **Create Close WhatsApp Activity** — Instanz-Nummer per `GET /instance/fetchInstances`, Lead suchen, Activity, bei Incoming Task
+6. **Close Recording Download** (GET `/whatsapp-close-recording`) — **kein zweiter Eingang für WhatsApp.** Close ruft diese URL später selbst auf, um die Call-Aufzeichnung herunterzuladen. Der POST-Webhook kann die Datei nicht mitliefern, weil er schon mit leerem 200 geantwortet hat.
+
+Zwei Webhooks, eine Aufgabe:
+
+| Webhook | Wer ruft ihn auf? | Wozu |
+| --- | --- | --- |
+| POST `whatsapp-close` | Evolution | Nachricht annehmen |
+| GET `whatsapp-close-recording` | Close-Server | Audio für `recording_url` holen |
 
 ## Logik
 
+- Lokale WhatsApp-Nummer: `GET {server_url}/instance/fetchInstances?instanceName=…` (`owner` / `number`). Fallback: Webhook-`sender`, danach optionales Config-Feld `my_whatsapp_number`
 - Telefonvarianten: `49160…`, `+49160…`, `160…`, `0160…`
 - Incoming: zuständiger User zuerst aus dem Custom Field, sonst letzte **Outbound**-Activity, sonst WA-/Call-History
 - Outgoing: Close-User aus `/me/`
@@ -63,7 +71,7 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 | Feld | Bedeutung |
 | --- | --- |
 | `close_api_key` | Close **Klartext**-API-Key (beginnt mit `api_`). Nicht den Hash/Fingerprint aus der Key-Liste. Nicht committen. |
-| `my_whatsapp_number` | lokale WhatsApp-Nummer ohne `+` (steht in Close als `local_phone`) |
+| `my_whatsapp_number` | Optional. Nur Fallback, wenn Evolution die Instanz-Nummer nicht liefert. |
 | `create_task` | `true`/`false` |
 | `excluded_phone_number` / `excluded_user_id` | History-Filter, falls das Custom Field leer ist |
 | `field_id_responsible_user` | Close Custom Field auf dem Lead; wenn gesetzt, hat es Vorrang vor der History |
@@ -71,7 +79,7 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 | `evolution_api_key` | Evolution-`apikey`. Fallback: `apikey` aus dem originalen Webhook |
 | `upload_media` | `true`/`false`, Default `true` |
 
-In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** `close_api_key` und `my_whatsapp_number` eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
+In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** den Close-Klartext-Key eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
 Nach dem Import erscheint in der Ausführung `recording_url` wie `https://…/webhook/whatsapp-close-recording?t=…`. Wenn der Call ohne Player ankommt, steht der Grund in `media_upload_error`.
 

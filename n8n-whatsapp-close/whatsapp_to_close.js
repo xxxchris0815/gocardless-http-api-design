@@ -10,9 +10,10 @@
  *  4. Dieser Code-Node: Run Once for All Items, JavaScript
  *
  * Config:
- *  close_api_key, my_whatsapp_number, create_task,
+ *  close_api_key, create_task,
  *  excluded_phone_number, excluded_user_id, field_id_responsible_user,
  *  evolution_base_url, evolution_api_key, upload_media
+ *  my_whatsapp_number nur optional, falls Evolution die Nummer nicht liefert
  */
 
 const RELEVANT_EVENTS = ["send.message", "messages.upsert"];
@@ -175,7 +176,8 @@ function filenameForMedia(kind, mime, given) {
 }
 
 function jidToPhone(jid) {
-  return cleanPhone(String(jid || "").split("@")[0]);
+  const local = String(jid || "").split("@")[0];
+  return cleanPhone(local.split(":")[0]);
 }
 
 function isNumericKeyedObject(value) {
@@ -700,6 +702,51 @@ function pickEvolutionKey(payload) {
   );
 }
 
+function phoneFromInstanceInfo(data, instanceName) {
+  const want = String(instanceName || "").toLowerCase();
+  let rows = [];
+  if (Array.isArray(data)) rows = data;
+  else if (data && typeof data === "object") {
+    if (Array.isArray(data.instance)) rows = data.instance;
+    else rows = [data];
+  }
+  const phones = [];
+  for (const row of rows) {
+    const inst = (row && row.instance) || row || {};
+    const name = String(inst.instanceName || inst.name || "").toLowerCase();
+    const owner = inst.owner || inst.ownerJid || inst.wuid || inst.wid || inst.number || "";
+    const phone = jidToPhone(owner) || cleanPhone(inst.number);
+    if (!phone) continue;
+    if (want && name && name !== want) continue;
+    phones.push(phone);
+    if (want && name === want) return phone;
+  }
+  return phones[0] || "";
+}
+
+async function fetchEvolutionInstancePhone({ baseUrl, apiKey, instance }) {
+  if (!baseUrl || !apiKey || !instance) return "";
+  const headers = { apikey: apiKey, Accept: "application/json" };
+  const urls = [
+    `${baseUrl}/instance/fetchInstances?instanceName=${encodeURIComponent(instance)}`,
+    `${baseUrl}/instance/fetchInstances`,
+  ];
+  let last = null;
+  for (const url of urls) {
+    const res = await httpJson("GET", url, { headers, timeout: 15000 });
+    last = res;
+    if (res.status >= 200 && res.status < 300) {
+      const phone = phoneFromInstanceInfo(res.data, instance);
+      if (phone) return phone;
+    }
+  }
+  const errDetail = last && last.data && (last.data.message || last.data.error);
+  if (last && last.status && last.status >= 400) {
+    log(`fetchInstances HTTP ${last.status}${errDetail ? `: ${errDetail}` : ""}`);
+  }
+  return "";
+}
+
 function pickIncomingWebhookUrl() {
   const items = jsonFromNode("WhatsApp Webhook");
   for (const it of items) {
@@ -881,7 +928,7 @@ async function main() {
     .trim()
     .replace(/^custom\./, "");
   const shouldCreateTask = pickBool("create_task", "WA_CREATE_TASK", true);
-  const localPhone = cleanPhone(pick("my_whatsapp_number", "MY_WHATSAPP_NUMBER", "491758925279"));
+  const configLocalPhone = cleanPhone(pick("my_whatsapp_number", "MY_WHATSAPP_NUMBER", ""));
   const shouldUploadMedia = pickBool("upload_media", "WA_UPLOAD_MEDIA", true);
 
   let payloads = [];
@@ -912,7 +959,7 @@ async function main() {
   }
 
   const payload = uniquePayloads[0];
-  const parsed = parseWebhook(payload, localPhone);
+  const parsed = parseWebhook(payload, configLocalPhone);
   if (!parsed) {
     return result({
       success: true,
@@ -927,7 +974,26 @@ async function main() {
   const evolutionBase = pickEvolutionBase(payload);
   const evolutionKey = pickEvolutionKey(payload);
 
-  log(`Step 1: ${parsed.is_incoming ? "incoming" : "outgoing"} ${parsed.remote_phone} (${parsed.type})`);
+  if (evolutionBase && evolutionKey && parsed.instance) {
+    try {
+      const evoPhone = await fetchEvolutionInstancePhone({
+        baseUrl: evolutionBase,
+        apiKey: evolutionKey,
+        instance: parsed.instance,
+      });
+      if (evoPhone) {
+        parsed.local_phone = evoPhone;
+        log(`Step 1b: Instanz-Nummer ${evoPhone} (${parsed.instance})`);
+      } else {
+        log(`Step 1b: fetchInstances ohne Nummer, Fallback ${parsed.local_phone || "leer"}`);
+      }
+    } catch (e) {
+      log(`Step 1b: Instanz-Nummer fehlgeschlagen: ${e.message || e}`);
+    }
+  }
+  if (!parsed.local_phone && configLocalPhone) parsed.local_phone = configLocalPhone;
+
+  log(`Step 1: ${parsed.is_incoming ? "incoming" : "outgoing"} ${parsed.remote_phone} (${parsed.type}) local=${parsed.local_phone || "?"}`);
 
   const meProbe = await httpJson("GET", "https://api.close.com/api/v1/me/", { headers: closeHeaders });
   if (closeAuthFailed(meProbe.status)) {
@@ -1368,6 +1434,8 @@ async function main() {
     recording_url: isVoice ? voiceRecordingUrl || undefined : undefined,
     direction: parsed.is_incoming ? (isVoice ? "inbound" : "incoming") : isVoice ? "outbound" : "outgoing",
     remote_phone: parsed.remote_phone,
+    local_phone: parsed.local_phone,
+    instance: parsed.instance,
   });
 }
 
