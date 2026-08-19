@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Evolution API WhatsApp webhook parsing tests."""
 
+import json
 import unittest
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from message_parse import (
     phone_search_variants,
     pick_responsible_user,
     public_media_url,
-    recording_public_url,
+    is_public_recording_url,
 )
 
 
@@ -318,30 +319,22 @@ class MediaUploadHelperTests(unittest.TestCase):
 
 
 class RecordingUrlTests(unittest.TestCase):
-    def test_rewrites_n8n_webhook_to_recording_get(self):
-        url = recording_public_url(
-            "https://automation.orgasmic.live/webhook/whatsapp-close",
-            "abc123",
-        )
-        self.assertEqual(
-            url,
-            "https://automation.orgasmic.live/webhook/whatsapp-close-recording?t=abc123",
-        )
-
-    def test_promotes_test_webhook_to_production_path(self):
-        url = recording_public_url(
-            "https://automation.orgasmic.live/webhook-test/whatsapp-close",
-            "tok",
-        )
-        self.assertEqual(
-            url,
-            "https://automation.orgasmic.live/webhook/whatsapp-close-recording?t=tok",
-        )
-
     def test_close_file_urls_are_not_public(self):
         self.assertTrue(is_close_app_file_url("https://app.close.com/go/file/xyz/voice.ogg"))
         self.assertTrue(is_close_app_file_url("https://api.close.com/api/v1/files/download/?x=1"))
-        self.assertFalse(is_close_app_file_url("https://automation.orgasmic.live/webhook/whatsapp-close-recording?t=1"))
+        self.assertFalse(is_public_recording_url("https://app.close.com/go/file/xyz/voice.m4a"))
+        self.assertFalse(
+            is_public_recording_url("https://automation.orgasmic.live/webhook/whatsapp-close-recording?t=1")
+        )
+
+    def test_signed_s3_url_is_public(self):
+        url = (
+            "https://close-attachments.s3.amazonaws.com/voice.m4a"
+            "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIA%2F20260819"
+            "&X-Amz-Signature=abc123"
+        )
+        self.assertTrue(is_public_recording_url(url))
+        self.assertFalse(is_public_recording_url("https://close-attachments.s3.amazonaws.com/voice.m4a"))
 
 
 class JsSmokeTests(unittest.TestCase):
@@ -372,8 +365,11 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("WhatsApp Voice beantworten", js)
         self.assertIn("recording_url", js)
         self.assertIn("last_outbound_activity", js)
-        self.assertIn("whatsapp-close-recording", js)
-        self.assertIn("$getWorkflowStaticData", js)
+        self.assertIn("isPublicRecordingUrl", js)
+        self.assertIn("resolvePublicRecordingUrl", js)
+        self.assertIn("X-Amz-Signature", js)
+        self.assertNotIn("whatsapp-close-recording", js)
+        self.assertNotIn("$getWorkflowStaticData", js)
         self.assertIn('source: "External"', js)
         self.assertIn("created_by", js)
         self.assertIn("Sprachdatei abspielen", js)
@@ -381,6 +377,17 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("fetchInstances", js)
         self.assertIn("phoneFromInstanceInfo", js)
         self.assertIn("fetchEvolutionInstancePhone", js)
+
+    def test_generated_workflow_has_single_post_webhook(self):
+        data = json.loads(Path(__file__).with_name("WhatsApp_Close_Activity.json").read_text(encoding="utf-8"))
+        webhooks = [n for n in data["nodes"] if n["type"] == "n8n-nodes-base.webhook"]
+        self.assertEqual(len(webhooks), 1)
+        self.assertEqual(webhooks[0]["parameters"]["path"], "whatsapp-close")
+        self.assertEqual(webhooks[0]["parameters"]["httpMethod"], "POST")
+        blob = json.dumps(data)
+        self.assertNotIn("whatsapp-close-recording", blob)
+        self.assertNotIn("$getWorkflowStaticData", blob)
+        self.assertIn("resolvePublicRecordingUrl", blob)
 
 
 if __name__ == "__main__":

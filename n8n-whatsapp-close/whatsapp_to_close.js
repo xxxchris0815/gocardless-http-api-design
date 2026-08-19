@@ -4,10 +4,14 @@
  * Nur Evolution API: send.message / messages.upsert.
  *
  * n8n-Setup:
- *  1. Webhook-Node (POST), Response: Immediately
+ *  1. Webhook-Node (POST /whatsapp-close), Response: Immediately
  *  2. Optional Filter: event ist send.message oder messages.upsert
  *  3. Set-Node mit Config, Include Other Input Fields = an
  *  4. Dieser Code-Node: Run Once for All Items, JavaScript
+ *
+ * Voice/Call: Close holt recording_url sofort per unauthentifiziertem GET.
+ * app.close.com/go/file und n8n-Static-Data-Webhooks funktionieren dafür nicht.
+ * Wir folgen dem Close-Files-Download auf die signierte S3/CloudFront-URL.
  *
  * Config:
  *  close_api_key, create_task,
@@ -603,7 +607,7 @@ function getCustomFieldValue(lead, fieldId) {
   return null;
 }
 
-async function httpCall(method, url, { headers = {}, body, qs, timeout = 20000, json = true } = {}) {
+async function httpCall(method, url, { headers = {}, body, qs, timeout = 20000, json = true, followRedirect = true, maxRedirects } = {}) {
   const options = {
     method,
     url,
@@ -612,16 +616,18 @@ async function httpCall(method, url, { headers = {}, body, qs, timeout = 20000, 
     ignoreHttpStatusErrors: true,
     returnFullResponse: true,
     timeout,
+    followRedirect,
   };
+  if (maxRedirects !== undefined) options.maxRedirects = maxRedirects;
   if (body !== undefined) options.body = body;
   if (qs !== undefined) options.qs = qs;
 
   if (httpHelper) {
     const result = await httpHelper(options);
     if (result && typeof result === "object" && "statusCode" in result) {
-      return { status: result.statusCode, data: result.body };
+      return { status: result.statusCode, data: result.body, headers: result.headers || {} };
     }
-    return { status: 200, data: result };
+    return { status: 200, data: result, headers: {} };
   }
   if (typeof fetch === "function") {
     let fetchUrl = url;
@@ -648,6 +654,7 @@ async function httpCall(method, url, { headers = {}, body, qs, timeout = 20000, 
       method,
       headers: fetchHeaders,
       body: fetchBody,
+      redirect: followRedirect ? "follow" : "manual",
     });
     let data = null;
     if (json) {
@@ -659,7 +666,13 @@ async function httpCall(method, url, { headers = {}, body, qs, timeout = 20000, 
     } else {
       data = await res.text();
     }
-    return { status: res.status, data };
+    const headersOut = {};
+    if (res.headers && typeof res.headers.forEach === "function") {
+      res.headers.forEach((value, key) => {
+        headersOut[key] = value;
+      });
+    }
+    return { status: res.status, data, headers: headersOut };
   }
   throw new Error("Kein HTTP-Helper in diesem Code-Node.");
 }
@@ -747,35 +760,6 @@ async function fetchEvolutionInstancePhone({ baseUrl, apiKey, instance }) {
   return "";
 }
 
-function pickIncomingWebhookUrl() {
-  const items = jsonFromNode("WhatsApp Webhook");
-  for (const it of items) {
-    if (it && it.webhookUrl) return String(it.webhookUrl);
-    const headers = (it && it.headers) || {};
-    const host = headers.host || headers.Host;
-    if (host) {
-      const proto = headers["x-forwarded-proto"] || headers["X-Forwarded-Proto"] || "https";
-      return `${proto}://${host}/webhook/whatsapp-close`;
-    }
-  }
-  if (inputItem && inputItem.webhookUrl) return String(inputItem.webhookUrl);
-  return "";
-}
-
-function recordingPublicUrl(token) {
-  const hook = pickIncomingWebhookUrl();
-  if (!hook || !token) return "";
-  try {
-    const u = new URL(hook);
-    let path = String(u.pathname || "").replace("/webhook-test/", "/webhook/");
-    const parts = path.replace(/\/+$/, "").split("/");
-    if (parts.length) parts[parts.length - 1] = "whatsapp-close-recording";
-    return `${u.origin}${parts.join("/")}?t=${encodeURIComponent(token)}`;
-  } catch (e) {
-    return "";
-  }
-}
-
 function isCloseAppFileUrl(url) {
   const raw = String(url || "");
   if (!raw) return false;
@@ -787,49 +771,90 @@ function isCloseAppFileUrl(url) {
   }
 }
 
-function newRecordingToken() {
+function headerGet(headers, name) {
+  if (!headers || typeof headers !== "object") return "";
+  const want = String(name || "").toLowerCase();
+  const keys = Object.keys(headers);
+  for (const key of keys) {
+    if (String(key).toLowerCase() === want) {
+      const val = headers[key];
+      if (Array.isArray(val)) return String(val[0] || "");
+      return String(val || "");
+    }
+  }
+  return "";
+}
+
+function isPublicRecordingUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw.startsWith("https://")) return false;
+  if (isCloseAppFileUrl(raw)) return false;
+  return /[?&](X-Amz-Signature|X-Amz-Credential|Key-Pair-Id|AWSAccessKeyId)=/i.test(raw);
+}
+
+function headersForUrl(url, authHeaders) {
   try {
-    if (typeof require === "function") {
-      return require("crypto").randomBytes(16).toString("hex");
+    const host = new URL(url).hostname.toLowerCase();
+    if (host === "api.close.com" || host === "app.close.com" || host.endsWith(".close.com")) {
+      return authHeaders || {};
     }
   } catch (e) {
-    /* sandbox without require */
+    /* ignore */
   }
-  return `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}${Math.random().toString(16).slice(2)}`;
+  return {};
 }
 
-function pruneRecordings(bag, now) {
-  const out = {};
-  const entries = Object.keys(bag || {}).map((k) => [k, bag[k]]);
-  entries.sort((a, b) => (Number((b[1] && b[1].exp) || 0) || 0) - (Number((a[1] && a[1].exp) || 0) || 0));
-  for (const [k, v] of entries) {
-    if (!v || (v.exp && v.exp < now)) continue;
-    if (Object.keys(out).length >= 30) break;
-    out[k] = v;
+async function fetchRedirectLocation(url, headers) {
+  if (typeof fetch === "function") {
+    const res = await fetch(url, {
+      method: "GET",
+      headers: headers || {},
+      redirect: "manual",
+    });
+    const loc = (res.headers && typeof res.headers.get === "function" && res.headers.get("location")) || "";
+    return { status: res.status, location: loc };
   }
-  return out;
+  const res = await httpCall("GET", url, {
+    headers: headers || {},
+    json: false,
+    timeout: 20000,
+    followRedirect: false,
+    maxRedirects: 0,
+  });
+  return { status: res.status, location: headerGet(res.headers, "location") };
 }
 
-function storeVoiceRecording({ buffer, contentType, filename }) {
-  if (!buffer || !buffer.length) return "";
-  try {
-    if (typeof $getWorkflowStaticData !== "function") return "";
-    const staticData = $getWorkflowStaticData("global");
-    const now = Date.now();
-    const token = newRecordingToken();
-    const bag = pruneRecordings(staticData.waRecordings || {}, now);
-    bag[token] = {
-      b64: buffer.toString("base64"),
-      contentType: contentType || "audio/mp4",
-      filename: filename || "recording.m4a",
-      exp: now + 30 * 60 * 1000,
-    };
-    staticData.waRecordings = bag;
-    return token;
-  } catch (e) {
-    log(`Voice-Store fehlgeschlagen: ${e.message || e}`);
-    return "";
+function extractS3Location(s3Res) {
+  const loc = headerGet(s3Res && s3Res.headers, "location");
+  if (loc && loc.startsWith("http")) return loc;
+  const body = typeof (s3Res && s3Res.data) === "string" ? s3Res.data : "";
+  const xml = /<Location>([^<]+)<\/Location>/i.exec(body);
+  if (xml) return xml[1].replace(/&amp;/g, "&");
+  return "";
+}
+
+function attachmentUrl(att) {
+  if (!att || typeof att !== "object") return "";
+  return String(att.url || att.download_url || att.href || "").trim();
+}
+
+async function resolvePublicRecordingUrl(downloadUrl, authHeaders) {
+  let current = String(downloadUrl || "").trim();
+  if (!current.startsWith("https://")) return "";
+  for (let i = 0; i < 5; i++) {
+    if (isPublicRecordingUrl(current)) return current;
+    try {
+      const hop = await fetchRedirectLocation(current, headersForUrl(current, authHeaders));
+      const loc = String(hop.location || "").trim();
+      log(`Recording-Redirect ${hop.status} ${current.split("?")[0]} → ${loc ? loc.split("?")[0] : "-"}`);
+      if (!loc) return "";
+      current = loc.startsWith("http") ? loc : new URL(loc, current).toString();
+    } catch (e) {
+      log(`Public recording URL: ${e.message || e}`);
+      return "";
+    }
   }
+  return isPublicRecordingUrl(current) ? current : "";
 }
 
 async function fetchEvolutionMedia({ baseUrl, apiKey, instance, key, message, convertAudio }) {
@@ -883,15 +908,31 @@ async function uploadCloseFile({ authHeaders, filename, contentType, buffer }) {
     body: multipart.body,
     json: false,
     timeout: 60000,
+    followRedirect: false,
+    maxRedirects: 0,
   });
   if (s3.status !== 201 && s3.status !== 200 && s3.status !== 204) {
     throw new Error(`Close S3 upload HTTP ${s3.status}`);
   }
+  const s3Location = extractS3Location(s3);
+  const publicUrl =
+    (isPublicRecordingUrl(s3Location) ? s3Location : "") ||
+    (await resolvePublicRecordingUrl(downloadUrl, authHeaders));
   return {
     url: downloadUrl,
     filename,
     size: buffer.length,
     content_type: contentType,
+    public_url: publicUrl || "",
+  };
+}
+
+function closeFileAttachment(file) {
+  return {
+    url: file.url,
+    filename: file.filename,
+    size: file.size,
+    content_type: file.content_type,
   };
 }
 
@@ -1248,33 +1289,24 @@ async function main() {
             contentType,
             media.fileName || parsed.filename
           );
-          attachments.push(
-            await uploadCloseFile({
-              authHeaders: closeHeaders,
-              filename,
-              contentType,
-              buffer: media.buffer,
-            })
-          );
-          log(`Step 7: Media hochgeladen (${contentType}, ${attachments[0].size} bytes)`);
+          const uploaded = await uploadCloseFile({
+            authHeaders: closeHeaders,
+            filename,
+            contentType,
+            buffer: media.buffer,
+          });
+          attachments.push(closeFileAttachment(uploaded));
+          log(`Step 7: Media hochgeladen (${contentType}, ${uploaded.size} bytes)`);
           if (isVoice) {
-            const token = storeVoiceRecording({
-              buffer: media.buffer,
-              contentType,
-              filename,
-            });
-            voiceRecordingUrl = recordingPublicUrl(token);
-            if (!token) {
-              mediaUploadError =
-                "Voice konnte nicht zwischengespeichert werden ($getWorkflowStaticData fehlt)";
-            } else if (!voiceRecordingUrl) {
-              mediaUploadError =
-                "Öffentliche Recording-URL fehlt (webhookUrl unbekannt). Workflow aktivieren und neu importieren.";
-            } else if (isCloseAppFileUrl(voiceRecordingUrl)) {
-              mediaUploadError = "Recording-URL zeigt auf Close Files (nicht öffentlich)";
-              voiceRecordingUrl = "";
+            voiceRecordingUrl =
+              uploaded.public_url ||
+              (await resolvePublicRecordingUrl(uploaded.url, closeHeaders));
+            if (voiceRecordingUrl) {
+              log(`Step 7: Öffentliche Recording-URL (${voiceRecordingUrl.split("?")[0]})`);
             } else {
-              log(`Step 7: Voice-Recording-URL bereit (${voiceRecordingUrl.split("?")[0]})`);
+              mediaUploadError =
+                "Keine öffentliche Audio-URL. Close lädt recording_url ohne Login; app.close.com/go/file ist dafür nicht nutzbar.";
+              log(`Step 7: ${mediaUploadError}`);
             }
           }
         }
@@ -1329,6 +1361,17 @@ async function main() {
     if (hintRes.status >= 200 && hintRes.status < 300) {
       hintActivity = hintRes.data || {};
       log(`Step 8a: WhatsApp-Hinweis ${hintActivity.id || "ok"}`);
+      if (!voiceRecordingUrl) {
+        const hintUrls = (hintActivity.attachments || []).map(attachmentUrl).filter(Boolean);
+        for (const hintUrl of hintUrls) {
+          voiceRecordingUrl = await resolvePublicRecordingUrl(hintUrl, closeHeaders);
+          if (voiceRecordingUrl) break;
+        }
+        if (voiceRecordingUrl) {
+          log(`Step 8a: Öffentliche Recording-URL aus Hinweis (${voiceRecordingUrl.split("?")[0]})`);
+          mediaUploadError = "";
+        }
+      }
     } else {
       log(`Step 8a: WhatsApp-Hinweis fehlgeschlagen HTTP ${hintRes.status}`);
     }

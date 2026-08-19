@@ -14,8 +14,6 @@ UNWRAP_ID = "fa5a5617-8290-4123-d0e0-412345678905"
 FILTER_ID = "c92d23e4-5f67-4890-abcd-1ef012345602"
 SET_ID = "da3e34f5-6078-4901-bcde-2f0123456703"
 CODE_ID = "eb4f4506-7189-4012-cdef-301234567804"
-REC_WEBHOOK_ID = "ac6c56d7-8e90-4123-9abc-2def12345613"
-REC_SERVE_ID = "bd7d67e8-9f01-4234-abcd-3ef012345714"
 
 ASSIGNMENTS = [
     ("close_api_key", ""),
@@ -71,50 +69,6 @@ for (const item of $input.all()) {
   }
 }
 return out;
-"""
-
-SERVE_RECORDING_JS = """const item = $input.first().json || {};
-const query = item.query || {};
-const token = String(query.t || item.t || "").trim();
-
-function empty() {
-  return [{ json: { ok: false, error: "recording not found" } }];
-}
-
-if (!token) return empty();
-
-let rec = null;
-try {
-  if (typeof $getWorkflowStaticData === "function") {
-    const staticData = $getWorkflowStaticData("global");
-    rec = staticData.waRecordings && staticData.waRecordings[token];
-    if (rec && rec.exp && Date.now() > rec.exp) rec = null;
-  }
-} catch (e) {
-  return [{ json: { ok: false, error: String(e.message || e) } }];
-}
-
-if (!rec || !rec.b64) return empty();
-
-const buffer = Buffer.from(rec.b64, "base64");
-const filename = rec.filename || "recording.m4a";
-const mime = rec.contentType || "audio/mp4";
-
-if (this.helpers && typeof this.helpers.prepareBinaryData === "function") {
-  const binary = await this.helpers.prepareBinaryData(buffer, filename, mime);
-  return [{ json: { ok: true }, binary: { data: binary } }];
-}
-
-return [{
-  json: { ok: true },
-  binary: {
-    data: {
-      data: rec.b64,
-      mimeType: mime,
-      fileName: filename,
-    },
-  },
-}];
 """
 
 
@@ -219,43 +173,7 @@ workflow = {
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [1160, 300],
-            "notes": "Lead per Telefon suchen, Activity anlegen, bei Incoming Task 'WhatsApp beantworten'. Voice: öffentliche Recording-URL für Close.",
-        },
-        {
-            "parameters": {
-                "httpMethod": "GET",
-                "path": "whatsapp-close-recording",
-                "responseMode": "lastNode",
-                "responseData": "firstEntryBinary",
-                "options": {
-                    "binaryPropertyName": "data",
-                    "responseHeaders": {
-                        "entries": [
-                            {"name": "Cache-Control", "value": "no-store"},
-                        ]
-                    }
-                },
-            },
-            "id": REC_WEBHOOK_ID,
-            "name": "Close Recording Download",
-            "type": "n8n-nodes-base.webhook",
-            "typeVersion": 2,
-            "position": [200, 560],
-            "webhookId": "whatsapp-close-recording",
-            "notes": "Öffentlicher GET für Close recording_url. Workflow muss aktiv sein.",
-        },
-        {
-            "parameters": {
-                "mode": "runOnceForAllItems",
-                "language": "javaScript",
-                "jsCode": SERVE_RECORDING_JS,
-            },
-            "id": REC_SERVE_ID,
-            "name": "Serve Voice Recording",
-            "type": "n8n-nodes-base.code",
-            "typeVersion": 2,
-            "position": [440, 560],
-            "notes": "Gibt die zwischengespeicherte Sprachnachricht als Audio-Binary zurück.",
+            "notes": "Lead per Telefon suchen, Activity anlegen, bei Incoming Task 'WhatsApp beantworten'. Voice: signierte S3-URL als Close recording_url.",
         },
     ],
     "connections": {
@@ -270,9 +188,6 @@ workflow = {
         },
         "Config": {
             "main": [[{"node": "Create Close WhatsApp Activity", "type": "main", "index": 0}]]
-        },
-        "Close Recording Download": {
-            "main": [[{"node": "Serve Voice Recording", "type": "main", "index": 0}]]
         },
     },
     "active": False,

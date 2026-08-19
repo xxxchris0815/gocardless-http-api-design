@@ -41,15 +41,9 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 2. **Unwrap Evolution Body** — holt `event`/`data` aus n8n-`headers`+`body`-Arrays
 3. **Message Events Only** — nur `send.message` und `messages.upsert`
 4. **Config** — Close-Key (die WhatsApp-Nummer kommt von Evolution)
-5. **Create Close WhatsApp Activity** — Instanz-Nummer per `GET /instance/fetchInstances`, Lead suchen, Activity, bei Incoming Task
-6. **Close Recording Download** (GET `/whatsapp-close-recording`) — **kein zweiter Eingang für WhatsApp.** Close ruft diese URL später selbst auf, um die Call-Aufzeichnung herunterzuladen. Der POST-Webhook kann die Datei nicht mitliefern, weil er schon mit leerem 200 geantwortet hat.
+5. **Create Close WhatsApp Activity** — Instanz-Nummer per `GET /instance/fetchInstances`, Lead suchen, Activity, bei Incoming Task. Bei Voice: Audio zu Close Files, dann Call mit öffentlicher `recording_url`.
 
-Zwei Webhooks, eine Aufgabe:
-
-| Webhook | Wer ruft ihn auf? | Wozu |
-| --- | --- | --- |
-| POST `whatsapp-close` | Evolution | Nachricht annehmen |
-| GET `whatsapp-close-recording` | Close-Server | Audio für `recording_url` holen |
+Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den Call-Player keine zweite n8n-URL.
 
 ## Logik
 
@@ -60,9 +54,12 @@ Zwei Webhooks, eine Aufgabe:
 - Bilder, Video, GIF, Dokument, Sticker: Evolution `getBase64FromMediaMessage` → Close Files → WhatsApp-`attachments`
 - Voice (Zapier-Port):
   1. WhatsApp-Activity als **Hinweis** (`🎤 Sprachnachricht empfangen` + `[▶️ Sprachdatei abspielen]`, Audio als Close-Files-Anhang)
-  2. Call mit `note_html`, `duration`, `recording_url` (öffentlicher GET-Webhook, analog zu Zapier `voice.link`)
+  2. Call mit `note_html`, `duration`, `recording_url`
   3. Task „WhatsApp Voice beantworten“ ohne Duplikat
-- Der Workflow muss **aktiv** sein, sonst kann Close die Recording-URL nicht abholen
+- Close holt `recording_url` **sofort und ohne Login**. Deshalb:
+  - `https://app.close.com/go/file/…` ist im Player **nicht** abspielbar (Login-Seite statt Audio)
+  - ein n8n-GET mit `$getWorkflowStaticData` ist ebenfalls unbrauchbar: Static Data wird erst gespeichert, wenn die Execution fertig ist — Close kommt in derselben Sekunde und bekommt 404/JSON
+  - die Call-`recording_url` muss eine **signierte S3/CloudFront-URL** sein (Redirect vom Close-Files-Download). Close kopiert die Datei dann in den eigenen Player
 - WhatsApp-CDN-URLs (`mmg.whatsapp.net`) werden nicht als Markdown verlinkt
 - Duplikate: gleiche `wamid` → skip (vor dem Media-Download)
 
@@ -81,7 +78,7 @@ Zwei Webhooks, eine Aufgabe:
 
 In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** den Close-Klartext-Key eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
-Nach dem Import erscheint in der Ausführung `recording_url` wie `https://…/webhook/whatsapp-close-recording?t=…`. Wenn der Call ohne Player ankommt, steht der Grund in `media_upload_error`.
+Nach dem Import eine **neue** Sprachnachricht testen. In der n8n-Ausführung muss `recording_url` eine `amazonaws.com`/`cloudfront.net`-URL mit `X-Amz-Signature` sein — nicht `app.close.com/go/file` und nicht `whatsapp-close-recording`. Fehlt sie, steht der Grund in `media_upload_error` bzw. in den Logs (`Recording-Redirect …`). Der WhatsApp-Hinweis bleibt über den In-App-Link abspielbar.
 
 ```bash
 cd n8n-whatsapp-close
