@@ -130,6 +130,22 @@ def public_media_url(url: Optional[str]) -> Optional[str]:
     return str(url)
 
 
+def first_public_media_url(*candidates: Any) -> Optional[str]:
+    """Prefer Evolution S3 mediaUrl over encrypted WhatsApp CDN urls."""
+    for cand in candidates:
+        if not cand:
+            continue
+        if isinstance(cand, (list, tuple)):
+            found = first_public_media_url(*cand)
+            if found:
+                return found
+            continue
+        pub = public_media_url(str(cand))
+        if pub:
+            return pub
+    return None
+
+
 def is_close_app_file_url(url: Optional[str]) -> bool:
     raw = str(url or "")
     if not raw:
@@ -269,10 +285,18 @@ def parse_evolution_message(payload: dict, default_local_phone: str) -> Optional
     if not msg_id:
         return None
 
-    inner = unwrap_message(data.get("message") or {})
+    raw_message = data.get("message") or {}
+    inner = unwrap_message(raw_message)
     message_type = data.get("messageType") or ""
     kind, caption, link, extra = _evolution_content(inner, message_type)
-    text = message_text_from_parts(kind, caption, link, extra)
+    media = first_public_media_url(
+        inner.get("mediaUrl") if isinstance(inner, dict) else None,
+        raw_message.get("mediaUrl") if isinstance(raw_message, dict) else None,
+        data.get("mediaUrl"),
+        data.get("media_url"),
+        link,
+    )
+    text = message_text_from_parts(kind, caption, media, extra)
     if not (text or "").strip():
         if kind == "reaction":
             return {"skip": True, "reason": "Reaction removed", "id": msg_id}
@@ -296,7 +320,7 @@ def parse_evolution_message(payload: dict, default_local_phone: str) -> Optional
         "local_phone": local_phone,
         "type": kind,
         "text": text,
-        "media_url": public_media_url(link),
+        "media_url": media,
         "timestamp": ts,
         "instance": payload.get("instance"),
         "event": event,

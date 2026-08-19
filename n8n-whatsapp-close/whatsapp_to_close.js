@@ -9,9 +9,10 @@
  *  3. Set-Node mit Config, Include Other Input Fields = an
  *  4. Dieser Code-Node: Run Once for All Items, JavaScript
  *
- * Voice/Call: Close holt recording_url sofort per unauthentifiziertem GET.
- * app.close.com/go/file und n8n-Static-Data-Webhooks funktionieren dafür nicht.
- * Wir folgen dem Close-Files-Download auf die signierte S3/CloudFront-URL.
+ * Medien: Evolution legt eine öffentliche S3-mediaUrl in data.message.mediaUrl.
+ * Voice/Call: diese URL direkt als Close recording_url (Close holt sie ohne Login).
+ * Andere Medien: S3-Link in der WhatsApp-Activity. Fallback ohne mediaUrl:
+ * Evolution getBase64 → Close Files.
  *
  * Config:
  *  close_api_key, create_task,
@@ -309,6 +310,24 @@ function publicMediaUrl(url) {
   return String(url);
 }
 
+function firstPublicMediaUrl() {
+  const candidates = [];
+  for (let i = 0; i < arguments.length; i++) {
+    const cand = arguments[i];
+    if (!cand) continue;
+    if (Array.isArray(cand)) {
+      for (let j = 0; j < cand.length; j++) candidates.push(cand[j]);
+    } else {
+      candidates.push(cand);
+    }
+  }
+  for (let i = 0; i < candidates.length; i++) {
+    const pub = publicMediaUrl(candidates[i]);
+    if (pub) return pub;
+  }
+  return null;
+}
+
 function unwrapMessage(message) {
   if (!message || typeof message !== "object") return {};
   for (const wrapper of WRAPPER_KEYS) {
@@ -484,9 +503,17 @@ function parseEvolution(payload, defaultLocalPhone) {
   const msgId = key.id || data.id;
   if (!msgId) return null;
 
-  const inner = unwrapMessage(data.message || {});
+  const rawMessage = data.message || {};
+  const inner = unwrapMessage(rawMessage);
   const { kind, caption, link, extra, mimetype, filename } = evolutionContent(inner, data.messageType || "");
-  let text = messageTextFromParts(kind, caption, link, extra);
+  const mediaUrl = firstPublicMediaUrl(
+    inner.mediaUrl,
+    rawMessage.mediaUrl,
+    data.mediaUrl,
+    data.media_url,
+    link
+  );
+  let text = messageTextFromParts(kind, caption, mediaUrl, extra);
   if (!String(text).trim()) {
     if (kind === "reaction") return { skip: true, reason: "Reaction removed", id: msgId };
     text = `[Mediennachricht: ${kind || data.messageType || "unknown"}]`;
@@ -501,7 +528,7 @@ function parseEvolution(payload, defaultLocalPhone) {
     local_phone: senderPhone || cleanPhone(defaultLocalPhone),
     type: kind,
     text,
-    media_url: publicMediaUrl(link),
+    media_url: mediaUrl,
     timestamp: data.messageTimestamp,
     instance: payload.instance,
     event,
@@ -1258,7 +1285,15 @@ async function main() {
   let attachments = [];
   let mediaUploadError = "";
   let voiceRecordingUrl = "";
-  if (shouldUploadMedia && needsMediaUpload(parsed.type)) {
+  if (isVoice && parsed.media_url) {
+    voiceRecordingUrl = parsed.media_url;
+    log(`Step 7: Evolution mediaUrl als recording_url (${voiceRecordingUrl.split("?")[0]})`);
+  }
+
+  const needBinaryUpload = shouldUploadMedia && needsMediaUpload(parsed.type) && !parsed.media_url;
+  if (parsed.media_url && needsMediaUpload(parsed.type) && !needBinaryUpload) {
+    log("Step 7: Öffentliche S3-mediaUrl, kein Close-Files-Upload");
+  } else if (needBinaryUpload) {
     if (!evolutionBase) {
       mediaUploadError = "evolution_base_url fehlt";
       log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
@@ -1353,9 +1388,11 @@ async function main() {
   if (isVoice) {
     const fromName = parsed.from_name || "WhatsApp";
     const closeFileUrl = attachments[0] && attachments[0].url ? attachments[0].url : "";
-    const playUrl = closeFileUrl || voiceRecordingUrl;
+    const playUrl = voiceRecordingUrl || parsed.media_url || closeFileUrl;
     let hintMarkdown = parsed.text || "🎤 Sprachnachricht empfangen";
-    if (playUrl) hintMarkdown += `\n\n[▶️ Sprachdatei abspielen](${playUrl})`;
+    if (playUrl && String(hintMarkdown).indexOf(playUrl) === -1) {
+      hintMarkdown += `\n\n[▶️ Sprachdatei abspielen](${playUrl})`;
+    }
 
     const hintRes = await createWhatsAppActivity(hintMarkdown);
     if (hintRes.status >= 200 && hintRes.status < 300) {
@@ -1470,9 +1507,10 @@ async function main() {
     hint_activity_id: isVoice ? hintActivity.id : undefined,
     task_created: taskCreated,
     task_reason: taskReason,
-    media_url: parsed.media_url,
+    media_url: parsed.media_url || voiceRecordingUrl || undefined,
     media_type: parsed.type,
-    media_uploaded: Boolean(attachments.length) || Boolean(voiceRecordingUrl),
+    media_uploaded: Boolean(attachments.length),
+    media_linked: Boolean(parsed.media_url),
     media_upload_error: mediaUploadError || undefined,
     recording_url: isVoice ? voiceRecordingUrl || undefined : undefined,
     direction: parsed.is_incoming ? (isVoice ? "inbound" : "incoming") : isVoice ? "outbound" : "outgoing",

@@ -171,6 +171,75 @@ class EvolutionSampleTests(unittest.TestCase):
         self.assertEqual(parsed["duration_seconds"], 8)
         self.assertEqual(parsed["from_name"], "Christian")
 
+    def test_incoming_voice_prefers_s3_media_url(self):
+        s3 = (
+            "https://s3.example.com/evolution/audioMessage/voice.oga"
+            "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=test"
+            "&X-Amz-Signature=abc123"
+        )
+        wrapped = [
+            {
+                "headers": {},
+                "body": {
+                    "event": "messages.upsert",
+                    "instance": "WA-Business_Alexandra",
+                    "data": {
+                        "key": {
+                            "remoteJid": "491601865421@s.whatsapp.net",
+                            "fromMe": False,
+                            "id": "ACB97A4776A99ECFD45F3069BC54B212",
+                        },
+                        "pushName": "Christian",
+                        "message": {
+                            "audioMessage": {
+                                "url": "https://mmg.whatsapp.net/v/t62.encrypted",
+                                "mimetype": "audio/ogg; codecs=opus",
+                                "seconds": 4,
+                                "ptt": True,
+                            },
+                            "mediaUrl": s3,
+                        },
+                        "messageType": "audioMessage",
+                        "messageTimestamp": 1787165155,
+                    },
+                    "sender": "14087093943@s.whatsapp.net",
+                    "server_url": "https://wa.example.com",
+                    "apikey": "REDACTED",
+                },
+            }
+        ]
+        parsed = parse_webhook(wrapped, "491758925279")
+        self.assertEqual(parsed["type"], "voice")
+        self.assertEqual(parsed["media_url"], s3)
+        self.assertIn("Abspielen", parsed["text"])
+        self.assertIn("s3.example.com", parsed["text"])
+        self.assertNotIn("mmg.whatsapp.net", parsed["text"])
+        self.assertEqual(parsed["duration_seconds"], 4)
+        self.assertTrue(is_public_recording_url(parsed["media_url"]))
+
+    def test_image_prefers_s3_media_url_over_cdn(self):
+        s3 = "https://s3.example.com/evolution/photo.jpg?X-Amz-Signature=abc"
+        payload = {
+            "event": "messages.upsert",
+            "data": {
+                "key": {"fromMe": False, "id": "IMG1", "remoteJid": "49160@s.whatsapp.net"},
+                "message": {
+                    "imageMessage": {
+                        "caption": "hier das foto",
+                        "url": "https://mmg.whatsapp.net/v/t62.encrypted",
+                    },
+                    "mediaUrl": s3,
+                },
+                "messageType": "imageMessage",
+            },
+        }
+        parsed = parse_webhook(payload, "49")
+        self.assertEqual(parsed["type"], "image")
+        self.assertEqual(parsed["media_url"], s3)
+        self.assertIn("Bild ansehen", parsed["text"])
+        self.assertIn("s3.example.com", parsed["text"])
+        self.assertNotIn("mmg.whatsapp.net", parsed["text"])
+
     def test_incoming_gif_video_message(self):
         payload = {
             "event": "messages.upsert",
@@ -335,6 +404,11 @@ class RecordingUrlTests(unittest.TestCase):
         )
         self.assertTrue(is_public_recording_url(url))
         self.assertFalse(is_public_recording_url("https://close-attachments.s3.amazonaws.com/voice.m4a"))
+        self.assertTrue(
+            is_public_recording_url(
+                "https://s3.example.com/evolution/voice.oga?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc"
+            )
+        )
 
 
 class JsSmokeTests(unittest.TestCase):
@@ -377,6 +451,9 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("fetchInstances", js)
         self.assertIn("phoneFromInstanceInfo", js)
         self.assertIn("fetchEvolutionInstancePhone", js)
+        self.assertIn("firstPublicMediaUrl", js)
+        self.assertIn("mediaUrl", js)
+        self.assertIn("Öffentliche S3-mediaUrl", js)
 
     def test_generated_workflow_has_single_post_webhook(self):
         data = json.loads(Path(__file__).with_name("WhatsApp_Close_Activity.json").read_text(encoding="utf-8"))
@@ -388,6 +465,7 @@ class JsSmokeTests(unittest.TestCase):
         self.assertNotIn("whatsapp-close-recording", blob)
         self.assertNotIn("$getWorkflowStaticData", blob)
         self.assertIn("resolvePublicRecordingUrl", blob)
+        self.assertIn("firstPublicMediaUrl", blob)
 
 
 if __name__ == "__main__":

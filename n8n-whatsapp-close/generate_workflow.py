@@ -173,7 +173,7 @@ workflow = {
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [1160, 300],
-            "notes": "Lead per Telefon suchen, Activity anlegen, bei Incoming Task 'WhatsApp beantworten'. Voice: signierte S3-URL als Close recording_url.",
+            "notes": "Lead per Telefon suchen, Activity anlegen, bei Incoming Task 'WhatsApp beantworten'. Voice: Evolution mediaUrl (S3) als Close recording_url.",
         },
     ],
     "connections": {
