@@ -172,6 +172,19 @@ def is_public_recording_url(url: Optional[str]) -> bool:
     )
 
 
+def needs_mp3_for_close_recording(url: Optional[str] = None, mime: str = "") -> bool:
+    """Close Call player only renders MP3, not WhatsApp OGA/OGG/Opus."""
+    clean = strip_mime(mime)
+    if clean in {"audio/mpeg", "audio/mp3"}:
+        return False
+    path = (urlparse(str(url or "")).path or str(url or "")).lower()
+    if path.endswith(".mp3"):
+        return False
+    if clean.startswith("audio/") or clean in {"application/ogg", "video/mp4", "audio/mp4"}:
+        return True
+    return any(path.endswith(ext) for ext in (".oga", ".ogg", ".opus", ".m4a", ".wav", ".aac"))
+
+
 def needs_media_upload(kind: str) -> bool:
     return kind in MEDIA_UPLOAD_KINDS
 

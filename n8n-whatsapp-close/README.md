@@ -3,7 +3,7 @@
 Nur **Evolution API**. Webhooks `send.message` und `messages.upsert` werden zu Close-Aktivitäten. Incoming-Nachrichten erzeugen optional eine Task.
 
 - Text, Bild, Video, GIF, Dokument, Sticker → WhatsApp-Activity mit **S3-Link** (`data.message.mediaUrl`)
-- Sprachnachricht (`ptt`) → WhatsApp-Hinweis mit S3-Link, danach **Call-Activity** mit `recording_url` = dieselbe öffentliche S3-URL
+- Sprachnachricht (`ptt`) → WhatsApp-Hinweis mit S3-Link, danach **Call-Activity**. Close spielt nur **MP3**; `.oga` wird per ffmpeg konvertiert.
 
 ```json
 {
@@ -41,7 +41,7 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 2. **Unwrap Evolution Body** — holt `event`/`data` aus n8n-`headers`+`body`-Arrays
 3. **Message Events Only** — nur `send.message` und `messages.upsert`
 4. **Config** — Close-Key (die WhatsApp-Nummer kommt von Evolution)
-5. **Create Close WhatsApp Activity** — Instanz-Nummer per `GET /instance/fetchInstances`, Lead suchen, Activity, bei Incoming Task. Bei Voice: `message.mediaUrl` (S3) als Close-`recording_url`.
+5. **Create Close WhatsApp Activity** — Instanz-Nummer per `GET /instance/fetchInstances`, Lead suchen, Activity, bei Incoming Task. Bei Voice: S3-OGA → MP3 → Close-`recording_url`.
 
 Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den Call-Player keine zweite n8n-URL.
 
@@ -53,10 +53,11 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 - Outgoing: Close-User aus `/me/`
 - Bilder, Video, GIF, Dokument, Sticker: öffentliche Evolution-`mediaUrl` (S3, mit `X-Amz-Signature`) als Markdown-Link in der WhatsApp-Activity. Nur wenn die URL fehlt: Evolution `getBase64FromMediaMessage` → Close Files
 - Voice:
-  1. WhatsApp-Activity als **Hinweis** (`🎤 Sprachnachricht empfangen` + S3-Abspiel-Link)
-  2. Call mit `note_html`, `duration`, `recording_url` = `message.mediaUrl` (Close lädt die Datei selbst herunter)
+  1. WhatsApp-Activity als **Hinweis** mit S3-Abspiel-Link (Original `.oga`, im Browser abspielbar)
+  2. Audio nach **MP3** konvertieren (`ffmpeg` auf dem n8n-Host), als `voice.mp3` / `audio/mpeg` zu Close Files, `recording_url` = öffentliche MP3-URL
   3. Task „WhatsApp Voice beantworten“ ohne Duplikat
-- Close holt `recording_url` **sofort und ohne Login**. WhatsApp-CDN (`mmg.whatsapp.net`) ist verschlüsselt und unbrauchbar; `app.close.com/go/file` ebenfalls. Die signierte S3-URL von Evolution ist der direkte Weg (wie früher Zapier `voice.link`).
+- Close holt `recording_url` **sofort und ohne Login** und zeigt im Call-Player **nur MP3**. OGA/OGG/Opus von WhatsApp wird ignoriert (leerer Player).
+- n8n-Container braucht `ffmpeg` (libmp3lame). Ohne ffmpeg steht der Grund in `media_upload_error`; der Hinweis-Link auf die S3-OGA bleibt.
 - WhatsApp-CDN-URLs werden nicht als Markdown verlinkt
 - Duplikate: gleiche `wamid` → skip (vor dem Media-Download)
 
@@ -75,7 +76,7 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 
 In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** den Close-Klartext-Key eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
-Nach dem Import eine **neue** Sprachnachricht testen. In der n8n-Ausführung muss `recording_url` die Evolution-S3-URL sein (`s3.…` mit `X-Amz-Signature`), `media_linked: true`. Der WhatsApp-Hinweis enthält denselben Abspiel-Link. Close erwartet intern oft MP3; Evolution liefert `.oga` (OGG/Opus) — wenn der Player die Datei lädt, sie aber nicht abspielt, liegt es am Format.
+Nach dem Import eine **neue** Sprachnachricht testen. In der n8n-Ausführung: `recording_format: mp3` und `recording_url` mit `X-Amz-Signature`. Fehlt ffmpeg, steht das in `media_upload_error` — dann `ffmpeg` im n8n-Image installieren (`apk add ffmpeg` bzw. `apt-get install ffmpeg`) und dem Code-Node `child_process` erlauben.
 
 ```bash
 cd n8n-whatsapp-close

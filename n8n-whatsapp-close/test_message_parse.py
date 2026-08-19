@@ -19,6 +19,7 @@ from message_parse import (
     pick_responsible_user,
     public_media_url,
     is_public_recording_url,
+    needs_mp3_for_close_recording,
 )
 
 
@@ -216,6 +217,9 @@ class EvolutionSampleTests(unittest.TestCase):
         self.assertNotIn("mmg.whatsapp.net", parsed["text"])
         self.assertEqual(parsed["duration_seconds"], 4)
         self.assertTrue(is_public_recording_url(parsed["media_url"]))
+        self.assertTrue(
+            needs_mp3_for_close_recording(parsed["media_url"], "audio/ogg; codecs=opus")
+        )
 
     def test_image_prefers_s3_media_url_over_cdn(self):
         s3 = "https://s3.example.com/evolution/photo.jpg?X-Amz-Signature=abc"
@@ -411,6 +415,19 @@ class RecordingUrlTests(unittest.TestCase):
         )
 
 
+class CloseMp3Tests(unittest.TestCase):
+    def test_oga_needs_mp3(self):
+        self.assertTrue(
+            needs_mp3_for_close_recording(
+                "https://s3.example.com/evolution/voice.oga?X-Amz-Signature=abc",
+                "audio/ogg; codecs=opus",
+            )
+        )
+        self.assertTrue(needs_mp3_for_close_recording("https://s3.example.com/a.ogg", "audio/ogg"))
+        self.assertFalse(needs_mp3_for_close_recording("https://s3.example.com/a.mp3", "audio/mpeg"))
+        self.assertFalse(needs_mp3_for_close_recording("https://cdn.example.com/rec.mp3"))
+
+
 class JsSmokeTests(unittest.TestCase):
     def test_n8n_script_is_evolution_only(self):
         js = Path(__file__).with_name("whatsapp_to_close.js").read_text(encoding="utf-8")
@@ -454,6 +471,10 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("firstPublicMediaUrl", js)
         self.assertIn("mediaUrl", js)
         self.assertIn("Öffentliche S3-mediaUrl", js)
+        self.assertIn("tryFfmpegToMp3", js)
+        self.assertIn("needsMp3ForCloseRecording", js)
+        self.assertIn("audio/mpeg", js)
+        self.assertIn("Close zeigt im Call-Player nur MP3", js)
 
     def test_generated_workflow_has_single_post_webhook(self):
         data = json.loads(Path(__file__).with_name("WhatsApp_Close_Activity.json").read_text(encoding="utf-8"))
@@ -466,6 +487,7 @@ class JsSmokeTests(unittest.TestCase):
         self.assertNotIn("$getWorkflowStaticData", blob)
         self.assertIn("resolvePublicRecordingUrl", blob)
         self.assertIn("firstPublicMediaUrl", blob)
+        self.assertIn("tryFfmpegToMp3", blob)
 
 
 if __name__ == "__main__":

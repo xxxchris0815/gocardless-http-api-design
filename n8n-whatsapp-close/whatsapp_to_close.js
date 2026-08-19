@@ -10,7 +10,8 @@
  *  4. Dieser Code-Node: Run Once for All Items, JavaScript
  *
  * Medien: Evolution legt eine öffentliche S3-mediaUrl in data.message.mediaUrl.
- * Voice/Call: diese URL direkt als Close recording_url (Close holt sie ohne Login).
+ * Voice/Call: Close-Player akzeptiert nur MP3. OGA/OGG/Opus wird nach MP3
+ * konvertiert (ffmpeg auf dem n8n-Host) und als recording_url gesetzt.
  * Andere Medien: S3-Link in der WhatsApp-Activity. Fallback ohne mediaUrl:
  * Evolution getBase64 → Close Files.
  *
@@ -148,6 +149,97 @@ function stripMime(mime) {
     .split(";")[0]
     .trim()
     .toLowerCase();
+}
+
+function filenameFromUrl(url) {
+  try {
+    const name = decodeURIComponent(new URL(url).pathname.split("/").pop() || "");
+    return name.replace(/[^\w.\-]+/g, "_");
+  } catch (e) {
+    return "";
+  }
+}
+
+function looksLikeMp3(buffer) {
+  if (!buffer || buffer.length < 3) return false;
+  if (buffer[0] === 0x49 && buffer[1] === 0x44 && buffer[2] === 0x33) return true;
+  return buffer[0] === 0xff && (buffer[1] & 0xe0) === 0xe0;
+}
+
+function isMp3Audio(buffer, mime, filename) {
+  if (looksLikeMp3(buffer)) return true;
+  const m = stripMime(mime);
+  if (m === "audio/mpeg" || m === "audio/mp3") return true;
+  return /\.mp3(\?|$)/i.test(String(filename || ""));
+}
+
+function needsMp3ForCloseRecording(url, mime) {
+  const m = stripMime(mime);
+  if (m === "audio/mpeg" || m === "audio/mp3") return false;
+  let path = "";
+  try {
+    path = new URL(String(url || "")).pathname.toLowerCase();
+  } catch (e) {
+    path = String(url || "").toLowerCase();
+  }
+  if (path.endsWith(".mp3")) return false;
+  if (m.startsWith("audio/") || m === "application/ogg" || m === "video/mp4" || m === "audio/mp4") return true;
+  return [".oga", ".ogg", ".opus", ".m4a", ".wav", ".aac"].some((ext) => path.endsWith(ext));
+}
+
+async function downloadBinary(url, timeout = 60000) {
+  if (typeof fetch === "function") {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`Download HTTP ${res.status}`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+  if (httpHelper) {
+    const result = await httpHelper({
+      method: "GET",
+      url,
+      encoding: "arraybuffer",
+      json: false,
+      returnFullResponse: true,
+      ignoreHttpStatusErrors: true,
+      timeout,
+    });
+    const status = result && result.statusCode;
+    const body = result && typeof result === "object" && "body" in result ? result.body : result;
+    if (status && status >= 400) throw new Error(`Download HTTP ${status}`);
+    if (Buffer.isBuffer(body)) return body;
+    if (body instanceof ArrayBuffer) return Buffer.from(body);
+    if (typeof body === "string") return Buffer.from(body, "binary");
+    return Buffer.from(body || []);
+  }
+  throw new Error("Kein HTTP-Helper für Binary-Download");
+}
+
+function tryFfmpegToMp3(buffer) {
+  if (!buffer || !buffer.length) return null;
+  let execFileSync;
+  try {
+    execFileSync = require("child_process").execFileSync;
+  } catch (e) {
+    log(`ffmpeg: child_process nicht erlaubt (${e.message || e})`);
+    return null;
+  }
+  const attempts = [
+    ["-y", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "16000", "-codec:a", "libmp3lame", "-b:a", "32k", "-f", "mp3", "pipe:1"],
+    ["-y", "-hide_banner", "-loglevel", "error", "-f", "ogg", "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "16000", "-codec:a", "libmp3lame", "-b:a", "32k", "-f", "mp3", "pipe:1"],
+  ];
+  for (let i = 0; i < attempts.length; i++) {
+    try {
+      const out = execFileSync("ffmpeg", attempts[i], {
+        input: buffer,
+        timeout: 45000,
+        maxBuffer: MAX_MEDIA_BYTES,
+      });
+      if (out && out.length > 64 && looksLikeMp3(out)) return Buffer.from(out);
+    } catch (e) {
+      log(`ffmpeg Versuch ${i + 1}: ${String(e.message || e).slice(0, 200)}`);
+    }
+  }
+  return null;
 }
 
 function filenameForMedia(kind, mime, given) {
@@ -1285,69 +1377,136 @@ async function main() {
   let attachments = [];
   let mediaUploadError = "";
   let voiceRecordingUrl = "";
-  if (isVoice && parsed.media_url) {
-    voiceRecordingUrl = parsed.media_url;
-    log(`Step 7: Evolution mediaUrl als recording_url (${voiceRecordingUrl.split("?")[0]})`);
-  }
 
-  const needBinaryUpload = shouldUploadMedia && needsMediaUpload(parsed.type) && !parsed.media_url;
-  if (parsed.media_url && needsMediaUpload(parsed.type) && !needBinaryUpload) {
-    log("Step 7: Öffentliche S3-mediaUrl, kein Close-Files-Upload");
-  } else if (needBinaryUpload) {
-    if (!evolutionBase) {
-      mediaUploadError = "evolution_base_url fehlt";
-      log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
-    } else if (!evolutionKey) {
-      mediaUploadError = "evolution_api_key fehlt";
-      log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
-    } else if (!parsed.instance) {
-      mediaUploadError = "instance fehlt im Webhook";
-      log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
-    } else {
-      try {
-        const media = await fetchEvolutionMedia({
+  if (isVoice) {
+    try {
+      let source = null;
+      if (parsed.media_url) {
+        source = {
+          buffer: await downloadBinary(parsed.media_url),
+          mimetype: parsed.mimetype || "audio/ogg",
+          fileName: filenameFromUrl(parsed.media_url) || "voice.oga",
+        };
+        log(`Step 7: S3-Audio geladen (${source.buffer.length} bytes, ${source.fileName})`);
+      } else if (shouldUploadMedia && evolutionBase && evolutionKey && parsed.instance) {
+        source = await fetchEvolutionMedia({
           baseUrl: evolutionBase,
           apiKey: evolutionKey,
           instance: parsed.instance,
           key: parsed.raw_key || { id: parsed.id },
           message: parsed.raw_message,
-          convertAudio: isVoice || parsed.type === "audio",
+          convertAudio: true,
         });
-        if (media.buffer.length > MAX_MEDIA_BYTES) {
-          mediaUploadError = `Datei zu groß (${media.buffer.length} bytes)`;
-          log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
+        log(`Step 7: Evolution-Audio geladen (${source.buffer.length} bytes, ${source.mimetype})`);
+      } else {
+        mediaUploadError = "Keine Audio-Quelle für MP3-Konvertierung";
+        log(`Step 7: ${mediaUploadError}`);
+      }
+
+      if (source && source.buffer && source.buffer.length) {
+        if (source.buffer.length > MAX_MEDIA_BYTES) {
+          mediaUploadError = `Datei zu groß (${source.buffer.length} bytes)`;
+          log(`Step 7: Media übersprungen (${mediaUploadError})`);
         } else {
-          const contentType =
-            stripMime(media.mimetype || parsed.mimetype) || "application/octet-stream";
-          const filename = filenameForMedia(
-            parsed.type,
-            contentType,
-            media.fileName || parsed.filename
-          );
-          const uploaded = await uploadCloseFile({
-            authHeaders: closeHeaders,
-            filename,
-            contentType,
-            buffer: media.buffer,
-          });
-          attachments.push(closeFileAttachment(uploaded));
-          log(`Step 7: Media hochgeladen (${contentType}, ${uploaded.size} bytes)`);
-          if (isVoice) {
-            voiceRecordingUrl =
-              uploaded.public_url ||
-              (await resolvePublicRecordingUrl(uploaded.url, closeHeaders));
-            if (voiceRecordingUrl) {
-              log(`Step 7: Öffentliche Recording-URL (${voiceRecordingUrl.split("?")[0]})`);
-            } else {
-              mediaUploadError =
-                "Keine öffentliche Audio-URL. Close lädt recording_url ohne Login; app.close.com/go/file ist dafür nicht nutzbar.";
-              log(`Step 7: ${mediaUploadError}`);
+          let mp3 = isMp3Audio(source.buffer, source.mimetype, source.fileName)
+            ? source.buffer
+            : tryFfmpegToMp3(source.buffer);
+          if (!mp3 && parsed.media_url && evolutionBase && evolutionKey && parsed.instance) {
+            try {
+              const converted = await fetchEvolutionMedia({
+                baseUrl: evolutionBase,
+                apiKey: evolutionKey,
+                instance: parsed.instance,
+                key: parsed.raw_key || { id: parsed.id },
+                message: parsed.raw_message,
+                convertAudio: true,
+              });
+              if (converted && converted.buffer) {
+                log(`Step 7: Evolution convertToMp4 (${converted.mimetype || "?"}, ${converted.buffer.length} bytes)`);
+                mp3 = isMp3Audio(converted.buffer, converted.mimetype, converted.fileName)
+                  ? converted.buffer
+                  : tryFfmpegToMp3(converted.buffer);
+              }
+            } catch (e) {
+              log(`Step 7: Evolution-Konvertierung: ${e.message || e}`);
             }
           }
+          if (mp3) {
+            const uploaded = await uploadCloseFile({
+              authHeaders: closeHeaders,
+              filename: "voice.mp3",
+              contentType: "audio/mpeg",
+              buffer: mp3,
+            });
+            attachments.push(closeFileAttachment(uploaded));
+            voiceRecordingUrl =
+              uploaded.public_url || (await resolvePublicRecordingUrl(uploaded.url, closeHeaders));
+            if (voiceRecordingUrl) {
+              log(`Step 7: MP3 recording_url (${mp3.length} bytes, ${voiceRecordingUrl.split("?")[0]})`);
+            } else {
+              mediaUploadError =
+                "MP3 erzeugt, aber Close-Files-URL ist nicht öffentlich. Call-Player braucht eine MP3-HTTPS-URL.";
+              log(`Step 7: ${mediaUploadError}`);
+            }
+          } else {
+            mediaUploadError =
+              "Close zeigt im Call-Player nur MP3, keine OGA/OGG/Opus. ffmpeg auf dem n8n-Host fehlt oder die Konvertierung ist fehlgeschlagen.";
+            log(`Step 7: ${mediaUploadError}`);
+          }
         }
-      } catch (e) {
-        mediaUploadError = String(e.message || e);
-        log(`Step 7: Media-Upload fehlgeschlagen: ${mediaUploadError}`);
+      }
+    } catch (e) {
+      mediaUploadError = String(e.message || e);
+      log(`Step 7: Voice-MP3 fehlgeschlagen: ${mediaUploadError}`);
+    }
+  } else {
+    const needBinaryUpload = shouldUploadMedia && needsMediaUpload(parsed.type) && !parsed.media_url;
+    if (parsed.media_url && needsMediaUpload(parsed.type) && !needBinaryUpload) {
+      log("Step 7: Öffentliche S3-mediaUrl, kein Close-Files-Upload");
+    } else if (needBinaryUpload) {
+      if (!evolutionBase) {
+        mediaUploadError = "evolution_base_url fehlt";
+        log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
+      } else if (!evolutionKey) {
+        mediaUploadError = "evolution_api_key fehlt";
+        log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
+      } else if (!parsed.instance) {
+        mediaUploadError = "instance fehlt im Webhook";
+        log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
+      } else {
+        try {
+          const media = await fetchEvolutionMedia({
+            baseUrl: evolutionBase,
+            apiKey: evolutionKey,
+            instance: parsed.instance,
+            key: parsed.raw_key || { id: parsed.id },
+            message: parsed.raw_message,
+            convertAudio: false,
+          });
+          if (media.buffer.length > MAX_MEDIA_BYTES) {
+            mediaUploadError = `Datei zu groß (${media.buffer.length} bytes)`;
+            log(`Step 7: Media-Upload übersprungen (${mediaUploadError})`);
+          } else {
+            const contentType =
+              stripMime(media.mimetype || parsed.mimetype) || "application/octet-stream";
+            const filename = filenameForMedia(
+              parsed.type,
+              contentType,
+              media.fileName || parsed.filename
+            );
+            const uploaded = await uploadCloseFile({
+              authHeaders: closeHeaders,
+              filename,
+              contentType,
+              buffer: media.buffer,
+            });
+            attachments.push(closeFileAttachment(uploaded));
+            log(`Step 7: Media hochgeladen (${contentType}, ${uploaded.size} bytes)`);
+          }
+        } catch (e) {
+          mediaUploadError = String(e.message || e);
+          log(`Step 7: Media-Upload fehlgeschlagen: ${mediaUploadError}`);
+        }
       }
     }
   }
@@ -1513,6 +1672,7 @@ async function main() {
     media_linked: Boolean(parsed.media_url),
     media_upload_error: mediaUploadError || undefined,
     recording_url: isVoice ? voiceRecordingUrl || undefined : undefined,
+    recording_format: isVoice && voiceRecordingUrl ? "mp3" : undefined,
     direction: parsed.is_incoming ? (isVoice ? "inbound" : "incoming") : isVoice ? "outbound" : "outgoing",
     remote_phone: parsed.remote_phone,
     local_phone: parsed.local_phone,
