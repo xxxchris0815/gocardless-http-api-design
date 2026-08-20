@@ -75,15 +75,21 @@ function findVoice(item) {
     const data = payload.data || {};
     const inner = unwrap(data.message || {});
     const aud = inner.audioMessage;
-    if (!aud || typeof aud !== "object" || !aud.ptt) continue;
+    if (!aud || typeof aud !== "object") continue;
     const mediaUrl = publicUrl(
-      inner.mediaUrl || data.mediaUrl || data.media_url || aud.mediaUrl || aud.url
+      inner.mediaUrl ||
+        (data.message && data.message.mediaUrl) ||
+        data.mediaUrl ||
+        data.media_url ||
+        aud.mediaUrl ||
+        aud.url
     );
     const msgId = (data.key && data.key.id) || data.id || "";
     return {
       mediaUrl,
       msgId,
       mimetype: String(aud.mimetype || "audio/ogg; codecs=opus"),
+      ptt: Boolean(aud.ptt),
     };
   }
   return null;
@@ -202,7 +208,7 @@ function ffmpegToMp3(buffer) {
     try {
       const mp3 = execFileSync("ffmpeg", attempts[i], {
         input: buffer,
-        timeout: 45000,
+        timeout: 180000,
         maxBuffer: MAX_MEDIA_BYTES,
       });
       if (mp3 && mp3.length > 64 && looksLikeMp3(mp3)) return Buffer.from(mp3);
@@ -224,7 +230,11 @@ async function main() {
   });
 
   const voice = findVoice(inputItem);
-  if (!voice) return [{ json: outJson }];
+  if (!voice) {
+    log("Convert: keine audioMessage im Item");
+    outJson.convert_logs = logs.slice();
+    return [{ json: outJson }];
+  }
   if (!voice.mediaUrl) {
     outJson.media_upload_error = "Keine öffentliche mediaUrl für Voice";
     outJson.convert_logs = logs.slice();

@@ -57,7 +57,7 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 - Outgoing: Close-User aus `/me/`
 - Bilder, Video, GIF, Dokument, Sticker: öffentliche Evolution-`mediaUrl` (S3, mit `X-Amz-Signature`) als Markdown-Link in der WhatsApp-Activity. Nur wenn die URL fehlt: Evolution `getBase64FromMediaMessage` → Close Files
 - Voice:
-  1. **Convert Voice to MP3**: OGA laden, ffmpeg → MPEG-1-MP3 (**44.1 kHz, 64 kbit CBR, mono**). 16 kHz / 32 kbit (WhatsApp-Opus-Rate) ist MPEG-2.5; Close zeigt dann oft „Unable to play audio file“. Extra ffmpeg-Versuche: OGG/Opus/WebM, `analyzeduration`/`probesize` für Pipes.
+  1. **Convert Voice to MP3**: Jede `audioMessage` (PTT **und** Audio-Datei, `ptt: false`) laden, ffmpeg → MPEG-1-MP3 (**44.1 kHz, 64 kbit CBR, mono**). Gruppen (`@g.us`) konvertiert der Node, Close legt sie trotzdem nicht an. 16 kHz / 32 kbit ist MPEG-2.5; Close zeigt dann oft „Unable to play audio file“. Extra ffmpeg-Versuche: OGG/Opus/WebM.
   2. **Prepare MinIO Upload**: presigned PUT + `presignedUrl` (GET der MP3)
   3. **Upload MP3 MinIO**: HTTP Request PUT (JSON bleibt, Antwort in `minio_put`)
   4. **Create Close WhatsApp Activity**: Lead finden, WhatsApp-Hinweis, Call mit `recording_url` aus `presignedUrl` oder Community-MinIO-Feld `url` (immer `https://`, Port `9000` entfernt)

@@ -520,6 +520,8 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("44100", convert)
         self.assertIn("64k", convert)
         self.assertNotIn('"16000"', convert)
+        self.assertNotIn("|| !aud.ptt", convert)
+        self.assertIn("keine audioMessage im Item", convert)
         self.assertIn("-analyzeduration", convert)
         self.assertIn("-f", convert)
         self.assertIn("ogg", convert)
