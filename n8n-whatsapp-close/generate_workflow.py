@@ -171,7 +171,7 @@ workflow = {
             "type": "n8n-nodes-base.set",
             "typeVersion": 2,
             "position": [920, 300],
-            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). close_api_key = Klartext-Key (api_…). s3_access_key / s3_secret_key = MinIO wie Evolution. Endpoint/Bucket können aus mediaUrl kommen.",
+            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). Keys: $('Config').first().json.close_api_key / s3_access_key usw.",
         },
         {
             "parameters": {

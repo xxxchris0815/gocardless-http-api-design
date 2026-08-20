@@ -6,7 +6,8 @@
  * n8n-Setup:
  *  1. Webhook-Node (POST /whatsapp-close), Response: Immediately
  *  2. Optional Filter: event ist send.message oder messages.upsert
- *  3. Set-Node mit Config, Include Other Input Fields = an
+ *  3. Set-Node "Config" — Keys werden per $('Config').first().json gelesen
+ *     (close_api_key, s3_access_key, …), nicht aus dem Input des Close-Nodes.
  *  4. Code-Node "Convert Voice to MP3" (nur ffmpeg → Binary)
  *  5. Code-Node "Prepare MinIO Upload" (presigned PUT/GET)
  *  6. HTTP-Request "Upload MP3 MinIO"
@@ -20,7 +21,7 @@
  *  3. Dieser Node: Lead finden, Hinweis-Activity, Call mit presignedUrl
  * Andere Medien: S3-Link in der WhatsApp-Activity.
  *
- * Config:
+ * Config: $('Config').first().json.close_api_key usw.
  *  close_api_key, create_task,
  *  excluded_phone_number, excluded_user_id, field_id_responsible_user,
  *  evolution_base_url, evolution_api_key, upload_media,
@@ -83,9 +84,17 @@ function envGet(key) {
   return "";
 }
 
+function configJson() {
+  try {
+    return $('Config').first().json || {};
+  } catch (e) {
+    return {};
+  }
+}
+
 function pick(key, envKey, fallback = "") {
-  const fromItem = inputItem[key];
-  if (fromItem !== undefined && fromItem !== null && fromItem !== "") return fromItem;
+  const fromConfig = configJson()[key];
+  if (fromConfig !== undefined && fromConfig !== null && fromConfig !== "") return fromConfig;
   const fromEnv = envGet(envKey);
   if (fromEnv) return fromEnv;
   return fallback;

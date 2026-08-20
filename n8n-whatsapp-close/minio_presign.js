@@ -2,6 +2,7 @@
  * Prepare MinIO Upload (n8n Code-Node)
  *
  * Nimmt die MP3-Binary aus Convert, baut presigned PUT/GET.
+ * Keys: $('Config').first().json.s3_access_key usw.
  * JSON + Binary durchreichen. Kein ffmpeg, kein Close.
  */
 
@@ -9,6 +10,20 @@ const logs = [];
 function log(msg) {
   logs.push(String(msg));
   console.log(msg);
+}
+
+function configJson() {
+  try {
+    return $('Config').first().json || {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function pickConfig(key, fallback) {
+  const v = configJson()[key];
+  if (v !== undefined && v !== null && v !== "") return String(v);
+  return fallback || "";
 }
 
 function pick(item, key, fallback) {
@@ -173,11 +188,11 @@ async function main() {
   try {
     const mediaUrl = pick(inputItem, "voice_media_url") || pick(inputItem, "media_url");
     const parsedS3 = parseS3MediaUrl(mediaUrl);
-    const endpoint = pick(inputItem, "s3_endpoint", (parsedS3 && parsedS3.endpoint) || "").replace(/\/+$/, "");
-    const bucket = pick(inputItem, "s3_bucket", (parsedS3 && parsedS3.bucket) || "").trim();
-    const accessKey = pick(inputItem, "s3_access_key").trim();
-    const secretKey = pick(inputItem, "s3_secret_key").trim();
-    const region = pick(inputItem, "s3_region", "us-east-1") || "us-east-1";
+    const endpoint = (pickConfig("s3_endpoint") || (parsedS3 && parsedS3.endpoint) || "").replace(/\/+$/, "");
+    const bucket = (pickConfig("s3_bucket") || (parsedS3 && parsedS3.bucket) || "").trim();
+    const accessKey = pickConfig("s3_access_key").trim();
+    const secretKey = pickConfig("s3_secret_key").trim();
+    const region = pickConfig("s3_region", "us-east-1") || "us-east-1";
     if (!endpoint || !bucket) throw new Error("s3_endpoint / s3_bucket fehlen (oder mediaUrl ohne Bucket-Pfad)");
     if (!accessKey || !secretKey) throw new Error("s3_access_key / s3_secret_key fehlen in Config");
     const key = mp3KeyFromSource(parsedS3 && parsedS3.key, pick(inputItem, "voice_msg_id"));

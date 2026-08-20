@@ -84,7 +84,7 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 | `s3_bucket` | Optional. Leer = erster Pfadteil der `mediaUrl` (`evolution`). |
 | `s3_region` | Default `us-east-1` (wie Evolution/MinIO). |
 
-In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** Close-Key **und** MinIO-Keys eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
+In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** Close-Key **und** MinIO-Keys eintragen. Close und MinIO-Presign lesen die Keys per `$('Config').first().json.close_api_key` (nicht aus dem Input des jeweiligen Nodes). Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
 Nach dem Import eine **neue** Sprachnachricht testen. Close muss `$json.presignedUrl` vom vorherigen Step haben (signierte MinIO-GET-URL der MP3).
 
