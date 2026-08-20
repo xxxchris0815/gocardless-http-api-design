@@ -420,6 +420,14 @@ class RecordingUrlTests(unittest.TestCase):
             force_https("http://s3.example.com/evolution/voice.mp3?X-Amz-Signature=abc"),
             "https://s3.example.com/evolution/voice.mp3?X-Amz-Signature=abc",
         )
+        self.assertEqual(
+            force_https("http://s3.example.com:9000/evolution/voice.mp3?X-Amz-Signature=abc"),
+            "https://s3.example.com/evolution/voice.mp3?X-Amz-Signature=abc",
+        )
+        self.assertEqual(
+            force_https("https://s3.example.com:9000/evolution/voice.mp3"),
+            "https://s3.example.com/evolution/voice.mp3",
+        )
         self.assertFalse(is_public_recording_url("http://s3.example.com/a.mp3?X-Amz-Signature=abc"))
         self.assertEqual(force_https("https://s3.example.com/a.mp3"), "https://s3.example.com/a.mp3")
 
@@ -521,6 +529,8 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("forceHttps", presign)
         self.assertIn("presignedUrl", js)
         self.assertIn("inputItem.presignedUrl", js)
+        self.assertIn("inputItem.url", js)
+        self.assertIn("publicHttpsUrl", js)
         self.assertNotIn('jsonFromNamed("Convert Voice to MP3")', js)
         self.assertNotIn('jsonFromNamed("Prepare MinIO Upload")', js)
         self.assertNotIn('jsonFromNamed("Upload MP3 MinIO")', js)
@@ -562,6 +572,8 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("X-Amz-Signature", presign_js)
         self.assertIn("activity/call", close_js)
         self.assertIn("inputItem.presignedUrl", close_js)
+        self.assertIn("inputItem.url", close_js)
+        self.assertIn("publicHttpsUrl", close_js)
         self.assertIn("$('Config').first().json", close_js)
         self.assertNotIn('jsonFromNamed("Convert Voice to MP3")', close_js)
         self.assertEqual(http["parameters"]["method"], "PUT")

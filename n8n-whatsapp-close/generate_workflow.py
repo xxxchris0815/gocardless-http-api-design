@@ -273,7 +273,7 @@ workflow = {
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [2120, 300],
-            "notes": "Lead suchen, WhatsApp-Hinweis, Call. recording_url = $json.presignedUrl vom vorherigen Step.",
+            "notes": "Lead suchen, WhatsApp-Hinweis, Call. recording_url = $json.presignedUrl oder $json.url (Community-MinIO), immer https ohne :9000.",
         },
     ],
     "connections": {

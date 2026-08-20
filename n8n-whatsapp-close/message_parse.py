@@ -6,7 +6,7 @@ import re
 import json
 from datetime import datetime, timezone
 from typing import Any, Optional
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, urlunparse
 
 
 RELEVANT_EVENTS = frozenset({"send.message", "messages.upsert"})
@@ -157,11 +157,24 @@ def is_close_app_file_url(url: Optional[str]) -> bool:
 
 
 def force_https(url: Optional[str]) -> str:
-    """Close recording_url must be https; MinIO itself often speaks http behind Caddy."""
+    """Close recording_url must be https without MinIO's internal :9000."""
     raw = str(url or "").strip()
-    if raw.lower().startswith("http://"):
-        return "https://" + raw[7:]
-    return raw
+    if not raw:
+        return ""
+    try:
+        parsed = urlparse(raw)
+        host = parsed.hostname or ""
+        if not host:
+            return raw
+        netloc = host
+        if parsed.port and parsed.port not in (80, 443, 9000):
+            netloc = f"{host}:{parsed.port}"
+        return urlunparse(("https", netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+    except Exception:
+        out = raw
+        if out.lower().startswith("http://"):
+            out = "https://" + out[7:]
+        return re.sub(r":9000(?=/|$|\?)", "", out)
 
 
 def is_public_recording_url(url: Optional[str]) -> bool:

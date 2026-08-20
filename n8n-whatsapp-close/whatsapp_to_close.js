@@ -12,13 +12,14 @@
  *  5. Code-Node "Prepare MinIO Upload" (presigned PUT/GET)
  *  6. HTTP-Request "Upload MP3 MinIO"
  *  7. Dieser Code-Node: Lead suchen, WhatsApp-Activity, Call.
- *     recording_url = $input.first().json.presignedUrl (MinIO-GET der MP3)
+ *     recording_url = presignedUrl oder url (Community-MinIO-Node), immer https ohne :9000
  *
  * Medien: Evolution legt eine öffentliche S3-mediaUrl in data.message.mediaUrl.
  * Voice/Call: Close-Player akzeptiert nur MP3. Ablauf:
  *  1. Convert: OGA laden, ffmpeg → MP3 Binary
  *  2. Presign + HTTP PUT nach MinIO (JSON behält presignedUrl)
- *  3. Dieser Node: Lead finden, Hinweis-Activity, Call mit presignedUrl
+ *     oder Community-MinIO-Node mit Feld url
+ *  3. Dieser Node: Lead finden, Hinweis-Activity, Call mit öffentlicher https-URL
  * Andere Medien: S3-Link in der WhatsApp-Activity.
  *
  * Config: $('Config').first().json.close_api_key usw.
@@ -1164,6 +1165,35 @@ function isPublicRecordingUrl(url) {
   return /[?&](X-Amz-Signature|X-Amz-Credential|Key-Pair-Id|AWSAccessKeyId)=/i.test(raw);
 }
 
+function publicHintHost(hint) {
+  const raw = String(hint || "").trim();
+  if (!raw) return "";
+  try {
+    const u = new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+    if (/^(minio|localhost|127\.0\.0\.1)$/i.test(u.hostname)) return "";
+    return u.hostname;
+  } catch (e) {
+    return "";
+  }
+}
+
+function publicHttpsUrl(url, publicHint) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  const hintHost = publicHintHost(publicHint);
+  try {
+    const u = new URL(raw);
+    if (/^(minio|localhost|127\.0\.0\.1)$/i.test(u.hostname) && hintHost) {
+      u.hostname = hintHost;
+    }
+    if (u.port === "9000" || u.port === "80") u.port = "";
+    u.protocol = "https:";
+    return u.toString();
+  } catch (e) {
+    return raw.replace(/^http:\/\//i, "https://").replace(/:9000(?=\/|$|\?)/, "");
+  }
+}
+
 function headersForUrl(url, authHeaders) {
   try {
     const host = new URL(url).hostname.toLowerCase();
@@ -1632,10 +1662,10 @@ async function main() {
   let voiceRecordingUrl = "";
 
   if (isVoice) {
-    voiceRecordingUrl = String(inputItem.presignedUrl || "").trim();
-    if (/^http:\/\//i.test(voiceRecordingUrl)) {
-      voiceRecordingUrl = `https://${voiceRecordingUrl.slice(7)}`;
-    }
+    voiceRecordingUrl = publicHttpsUrl(
+      inputItem.presignedUrl || inputItem.url || inputItem.Url || inputItem.location,
+      inputItem.voice_media_url || inputItem.media_url || pick("s3_endpoint", "S3_ENDPOINT")
+    );
     if (voiceRecordingUrl) log(`Step 7: recording_url ${voiceRecordingUrl.split("?")[0]}`);
   } else {
     const needBinaryUpload = shouldUploadMedia && needsMediaUpload(parsed.type) && !parsed.media_url;

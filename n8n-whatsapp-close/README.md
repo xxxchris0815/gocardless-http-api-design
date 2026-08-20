@@ -45,7 +45,7 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 6. **Voice MP3?** — IF: `needs_minio_upload`
 7. **Prepare MinIO Upload** — presigned PUT/GET (nur Voice)
 8. **Upload MP3 MinIO** — HTTP Request PUT der MP3
-9. **Create Close WhatsApp Activity** — Lead suchen, Activity, Call mit `recording_url` = `$json.presignedUrl`
+9. **Create Close WhatsApp Activity** — Lead suchen, Activity, Call mit `recording_url` = `$json.presignedUrl` oder `$json.url` (https, ohne `:9000`)
 
 Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den Call-Player keine zweite n8n-URL.
 
@@ -60,7 +60,7 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
   1. **Convert Voice to MP3**: OGA laden, ffmpeg → MP3, Binary `data`. Kein MinIO, kein Close. Extra ffmpeg-Versuche: OGG/Opus/WebM, `analyzeduration`/`probesize` für Pipes.
   2. **Prepare MinIO Upload**: presigned PUT + `presignedUrl` (GET der MP3)
   3. **Upload MP3 MinIO**: HTTP Request PUT (JSON bleibt, Antwort in `minio_put`)
-  4. **Create Close WhatsApp Activity**: Lead finden, WhatsApp-Hinweis, Call mit `recording_url` = `$input.first().json.presignedUrl`
+  4. **Create Close WhatsApp Activity**: Lead finden, WhatsApp-Hinweis, Call mit `recording_url` aus `presignedUrl` oder Community-MinIO-Feld `url` (immer `https://`, Port `9000` entfernt)
 - Close-Files-Upload für Voice entfällt (HTTP 400 / Login-URLs). Close holt die MinIO-URL ohne Login und spielt nur MP3.
 - n8n-Container braucht `ffmpeg` (libmp3lame) und `NODE_FUNCTION_ALLOW_BUILTIN=child_process`.
 - MinIO-Keys in Config: dieselben wie Evolution (`S3_ACCESS_KEY` / `S3_SECRET_KEY`). Endpoint und Bucket kommen aus `mediaUrl`, wenn die Config-Felder leer sind.
@@ -80,13 +80,25 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 | `evolution_api_key` | Evolution-`apikey`. Fallback: `apikey` aus dem originalen Webhook |
 | `upload_media` | `true`/`false`, Default `true`. Nur Fallback, wenn im Webhook **keine** öffentliche `mediaUrl` steckt. |
 | `s3_access_key` / `s3_secret_key` | MinIO-Zugang, **dieselben Keys wie Evolution**. Nicht committen. |
-| `s3_endpoint` | Optional. Für den **PUT** aus n8n, z. B. `http://minio:9000`. Close braucht **https** — die GET-`presignedUrl` kommt von der öffentlichen `mediaUrl` (`https://s3.…`). |
+| `s3_endpoint` | Optional. Für den **PUT** aus n8n, z. B. `http://minio:9000`. Close braucht **https** auf Port 443 — die GET-URL kommt von der öffentlichen `mediaUrl` (`https://s3.…`) oder wird aus `http://s3.…:9000` umgeschrieben. |
 | `s3_bucket` | Optional. Leer = erster Pfadteil der `mediaUrl` (`evolution`). |
 | `s3_region` | Default `us-east-1` (wie Evolution/MinIO). |
 
 In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** Close-Key **und** MinIO-Keys eintragen. Close und MinIO-Presign lesen die Keys per `$('Config').first().json.close_api_key` (nicht aus dem Input des jeweiligen Nodes). Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
-Nach dem Import eine **neue** Sprachnachricht testen. Close muss `$json.presignedUrl` mit **https://** haben (Close lehnt `http://` ab). MinIO intern darf HTTP bleiben; Caddy/`s3.…` terminiert TLS. Evolution: öffentliche mediaUrl mit `https://s3.…`, nicht `http://minio:9000`.
+Nach dem Import eine **neue** Sprachnachricht testen. Close muss eine `recording_url` mit **https://** ohne Port **9000** haben (Close lehnt `http://` ab; `https://s3.…:9000` scheitert an TLS, weil 9000 intern HTTP ist). MinIO intern darf HTTP bleiben; Caddy/`s3.…` terminiert TLS. Evolution: öffentliche mediaUrl mit `https://s3.…`, nicht `http://minio:9000`.
+
+### Community-MinIO-Node
+
+Der Community-Node gibt oft nur `{ "url": "http://minio:9000/…" }` oder `{ "url": "http://s3.…:9000/…" }` zurück. Close liest `$json.url` und schreibt auf `https://s3.…` um (Host aus der Evolution-`mediaUrl`, Port 9000 weg).
+
+Damit die Signatur nach dem Umschreiben noch gilt, müssen die **n8n-MinIO-Credentials** schon gegen den öffentlichen Host signieren:
+
+- Endpoint: `s3.orgasmic.live` (ohne `http://minio` und ohne `:9000`)
+- Port: `443`
+- SSL / useSSL: an
+
+Sonst PUT intern gegen `http://minio:9000` und Close-GET über `https://s3.…` — Host-Header in der SigV4-Signatur passt dann nicht (MinIO 403). Alternative: den mitgelieferten Node **Prepare MinIO Upload** nutzen, der PUT intern und GET öffentlich getrennt presigned.
 
 ```bash
 cd n8n-whatsapp-close

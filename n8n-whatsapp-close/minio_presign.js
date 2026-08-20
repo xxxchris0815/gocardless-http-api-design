@@ -142,8 +142,15 @@ function s3Host(endpoint) {
 
 function forceHttps(url) {
   const raw = String(url || "").trim();
-  if (/^http:\/\//i.test(raw)) return `https://${raw.slice(7)}`;
-  return raw;
+  if (!raw) return "";
+  try {
+    const u = new URL(raw.startsWith("http") ? raw : `https://${raw}`);
+    if (u.port === "9000" || u.port === "80") u.port = "";
+    u.protocol = "https:";
+    return u.toString().replace(/\/+$/, "");
+  } catch (e) {
+    return raw.replace(/^http:\/\//i, "https://").replace(/:9000(?=\/|$)/, "");
+  }
 }
 
 function s3ObjectUrl(endpoint, bucket, key) {
