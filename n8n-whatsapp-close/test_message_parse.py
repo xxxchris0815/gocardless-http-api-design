@@ -455,8 +455,7 @@ class MinioUrlTests(unittest.TestCase):
 class JsSmokeTests(unittest.TestCase):
     def test_n8n_script_is_evolution_only(self):
         js = Path(__file__).with_name("whatsapp_to_close.js").read_text(encoding="utf-8")
-        convert = Path(__file__).with_name("voice_convert_main.js").read_text(encoding="utf-8")
-        blob = js + convert
+        convert = Path(__file__).with_name("voice_convert.js").read_text(encoding="utf-8")
         self.assertIn("send.message", js)
         self.assertIn("messages.upsert", js)
         self.assertIn("whatsapp_message", js)
@@ -500,10 +499,19 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("tryFfmpegToMp3", js)
         self.assertIn("needsMp3ForCloseRecording", js)
         self.assertIn("audio/mpeg", js)
-        self.assertIn("Close zeigt im Call-Player nur MP3", blob)
+        self.assertIn("ffmpegToMp3", convert)
+        self.assertIn("libmp3lame", convert)
+        self.assertIn("-analyzeduration", convert)
+        self.assertIn("-f", convert)
+        self.assertIn("ogg", convert)
+        self.assertNotIn("closeAuthHeader", convert)
+        self.assertNotIn("prepareMinioMp3Upload", convert)
+        self.assertNotIn("activity/call", convert)
+        self.assertIn("ffmpeg fehlt oder Konvertierung fehlgeschlagen", convert)
         self.assertIn("prepareMinioMp3Upload", js)
         self.assertIn("presignMinioPut", js)
         self.assertIn('jsonFromNamed("Convert Voice to MP3")', js)
+        self.assertIn('jsonFromNamed("Prepare MinIO Upload")', js)
         self.assertIn('jsonFromNamed("Upload MP3 MinIO")', js)
         self.assertIn("parseS3MediaUrl", js)
         self.assertIn("s3_access_key", js)
@@ -518,24 +526,37 @@ class JsSmokeTests(unittest.TestCase):
         names = [n["name"] for n in data["nodes"]]
         self.assertIn("Convert Voice to MP3", names)
         self.assertIn("Voice MP3?", names)
+        self.assertIn("Prepare MinIO Upload", names)
         self.assertIn("Upload MP3 MinIO", names)
         self.assertIn("Create Close WhatsApp Activity", names)
         by_name = {n["name"]: n for n in data["nodes"]}
         convert_js = by_name["Convert Voice to MP3"]["parameters"]["jsCode"]
+        presign_js = by_name["Prepare MinIO Upload"]["parameters"]["jsCode"]
         close_js = by_name["Create Close WhatsApp Activity"]["parameters"]["jsCode"]
         http = by_name["Upload MP3 MinIO"]
         self.assertIn("Convert: MP3 erzeugt", convert_js)
         self.assertIn("prepareBinaryData", convert_js)
+        self.assertIn("ffmpegToMp3", convert_js)
+        self.assertIn("-analyzeduration", convert_js)
         self.assertIn("needs_minio_upload", convert_js)
         self.assertNotIn("activity/call", convert_js)
+        self.assertNotIn("close_api_key", convert_js)
+        self.assertNotIn("s3_put_url", convert_js)
+        self.assertIn("s3_put_url", presign_js)
+        self.assertIn("X-Amz-Signature", presign_js)
         self.assertIn("activity/call", close_js)
         self.assertIn('jsonFromNamed("Convert Voice to MP3")', close_js)
+        self.assertIn('jsonFromNamed("Prepare MinIO Upload")', close_js)
         self.assertEqual(http["parameters"]["method"], "PUT")
         self.assertEqual(http["parameters"]["contentType"], "binaryData")
         self.assertEqual(http["parameters"]["inputDataFieldName"], "data")
         self.assertIn("s3_put_url", http["parameters"]["url"])
         self.assertEqual(
             data["connections"]["Voice MP3?"]["main"][0][0]["node"],
+            "Prepare MinIO Upload",
+        )
+        self.assertEqual(
+            data["connections"]["Prepare MinIO Upload"]["main"][0][0]["node"],
             "Upload MP3 MinIO",
         )
         self.assertEqual(

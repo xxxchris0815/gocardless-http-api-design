@@ -8,13 +8,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 CLOSE_JS = (ROOT / "whatsapp_to_close.js").read_text(encoding="utf-8")
-CONVERT_MAIN = (ROOT / "voice_convert_main.js").read_text(encoding="utf-8")
-MAIN_MARK = "\nasync function main() {\n"
-main_idx = CLOSE_JS.find(MAIN_MARK)
-if main_idx < 0:
-    raise SystemExit("whatsapp_to_close.js: async function main() not found")
-HELPERS_JS = CLOSE_JS[:main_idx].rstrip() + "\n\n"
-CONVERT_JS = HELPERS_JS + CONVERT_MAIN
+CONVERT_JS = (ROOT / "voice_convert.js").read_text(encoding="utf-8")
+PRESIGN_JS = (ROOT / "minio_presign.js").read_text(encoding="utf-8")
 
 WEBHOOK_ID = "b81c12d3-4e56-4789-9abc-0def12345601"
 UNWRAP_ID = "fa5a5617-8290-4123-d0e0-412345678905"
@@ -22,6 +17,7 @@ FILTER_ID = "c92d23e4-5f67-4890-abcd-1ef012345602"
 SET_ID = "da3e34f5-6078-4901-bcde-2f0123456703"
 CONVERT_ID = "fc5a5618-8291-4124-d0e1-412345678906"
 IF_ID = "0d6b6729-93a2-4235-e1f2-523456789017"
+PRESIGN_ID = "2f8d894b-b5c4-4457-a314-745678901239"
 HTTP_ID = "1e7c783a-a4b3-4346-f203-634567890128"
 CODE_ID = "eb4f4506-7189-4012-cdef-301234567804"
 
@@ -188,7 +184,7 @@ workflow = {
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [1160, 300],
-            "notes": "Voice: OGA laden, ffmpeg → MP3, Binary + presigned MinIO-URLs. Sonst JSON durchreichen (needs_minio_upload=false).",
+            "notes": "Nur ffmpeg: Voice-OGA laden, MP3 als Binary data ausgeben. JSON durchreichen. Kein MinIO, kein Close.",
         },
         {
             "parameters": {
@@ -220,7 +216,20 @@ workflow = {
             "type": "n8n-nodes-base.if",
             "typeVersion": 2.2,
             "position": [1400, 300],
-            "notes": "Nur Voice mit fertiger MP3 geht in den MinIO-PUT.",
+            "notes": "Nur Voice mit fertiger MP3 geht in Presign + MinIO-PUT.",
+        },
+        {
+            "parameters": {
+                "mode": "runOnceForAllItems",
+                "language": "javaScript",
+                "jsCode": PRESIGN_JS,
+            },
+            "id": PRESIGN_ID,
+            "name": "Prepare MinIO Upload",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [1640, 180],
+            "notes": "Presigned PUT/GET für die MP3. Binary durchreichen.",
         },
         {
             "parameters": {
@@ -248,9 +257,9 @@ workflow = {
             "name": "Upload MP3 MinIO",
             "type": "n8n-nodes-base.httpRequest",
             "typeVersion": 4.2,
-            "position": [1640, 180],
+            "position": [1880, 180],
             "onError": "continueRegularOutput",
-            "notes": "PUT der MP3 nach MinIO über die presigned URL aus Convert. Close liest statusCode von hier.",
+            "notes": "PUT der MP3 nach MinIO über die presigned URL aus Prepare MinIO Upload.",
         },
         {
             "parameters": {
@@ -262,8 +271,8 @@ workflow = {
             "name": "Create Close WhatsApp Activity",
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
-            "position": [1880, 300],
-            "notes": "Liest Webhook/Config aus Convert Voice to MP3. Lead suchen, WhatsApp-Hinweis, Call mit recording_url.",
+            "position": [2120, 300],
+            "notes": "Liest Webhook aus Convert Voice to MP3, recording_url aus Prepare MinIO Upload. Lead suchen, WhatsApp-Hinweis, Call.",
         },
     ],
     "connections": {
@@ -284,9 +293,12 @@ workflow = {
         },
         "Voice MP3?": {
             "main": [
-                [{"node": "Upload MP3 MinIO", "type": "main", "index": 0}],
+                [{"node": "Prepare MinIO Upload", "type": "main", "index": 0}],
                 [{"node": "Create Close WhatsApp Activity", "type": "main", "index": 0}],
             ]
+        },
+        "Prepare MinIO Upload": {
+            "main": [[{"node": "Upload MP3 MinIO", "type": "main", "index": 0}]]
         },
         "Upload MP3 MinIO": {
             "main": [[{"node": "Create Close WhatsApp Activity", "type": "main", "index": 0}]]

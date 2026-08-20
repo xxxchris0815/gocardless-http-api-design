@@ -7,14 +7,15 @@
  *  1. Webhook-Node (POST /whatsapp-close), Response: Immediately
  *  2. Optional Filter: event ist send.message oder messages.upsert
  *  3. Set-Node mit Config, Include Other Input Fields = an
- *  4. Code-Node "Convert Voice to MP3" (ffmpeg, Binary + Presign)
- *  5. HTTP-Request "Upload MP3 MinIO" (PUT, nur wenn needs_minio_upload)
- *  6. Dieser Code-Node: Lead suchen, WhatsApp-Activity, Call mit recording_url
+ *  4. Code-Node "Convert Voice to MP3" (nur ffmpeg → Binary)
+ *  5. Code-Node "Prepare MinIO Upload" (presigned PUT/GET)
+ *  6. HTTP-Request "Upload MP3 MinIO"
+ *  7. Dieser Code-Node: Lead suchen, WhatsApp-Activity, Call mit recording_url
  *
  * Medien: Evolution legt eine öffentliche S3-mediaUrl in data.message.mediaUrl.
  * Voice/Call: Close-Player akzeptiert nur MP3. Ablauf:
- *  1. Convert-Node: OGA laden, ffmpeg → MP3, presigned PUT/GET
- *  2. HTTP-Request: MP3 nach MinIO PUT
+ *  1. Convert: OGA laden, ffmpeg → MP3 Binary
+ *  2. Presign + HTTP PUT nach MinIO
  *  3. Dieser Node: Lead finden, Hinweis-Activity, Call mit s3_get_url
  * Andere Medien: S3-Link in der WhatsApp-Activity.
  *
@@ -1645,10 +1646,15 @@ async function main() {
 
   if (isVoice) {
     const convertJson = jsonFromNamed("Convert Voice to MP3");
-    voiceRecordingUrl = convertJson.s3_get_url || inputItem.s3_get_url || "";
-    mediaUploadError = convertJson.media_upload_error || inputItem.media_upload_error || "";
+    const presignJson = jsonFromNamed("Prepare MinIO Upload");
+    voiceRecordingUrl = presignJson.s3_get_url || convertJson.s3_get_url || inputItem.s3_get_url || "";
+    mediaUploadError =
+      presignJson.media_upload_error || convertJson.media_upload_error || inputItem.media_upload_error || "";
     if (convertJson.convert_logs && convertJson.convert_logs.length) {
       convertJson.convert_logs.forEach((line) => log(line));
+    }
+    if (presignJson.presign_logs && presignJson.presign_logs.length) {
+      presignJson.presign_logs.forEach((line) => log(line));
     }
     if (convertJson.needs_minio_upload || inputItem.needs_minio_upload) {
       const up = jsonFromNamed("Upload MP3 MinIO");
