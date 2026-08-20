@@ -7,12 +7,22 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-JS = (ROOT / "whatsapp_to_close.js").read_text(encoding="utf-8")
+CLOSE_JS = (ROOT / "whatsapp_to_close.js").read_text(encoding="utf-8")
+CONVERT_MAIN = (ROOT / "voice_convert_main.js").read_text(encoding="utf-8")
+MAIN_MARK = "\nasync function main() {\n"
+main_idx = CLOSE_JS.find(MAIN_MARK)
+if main_idx < 0:
+    raise SystemExit("whatsapp_to_close.js: async function main() not found")
+HELPERS_JS = CLOSE_JS[:main_idx].rstrip() + "\n\n"
+CONVERT_JS = HELPERS_JS + CONVERT_MAIN
 
 WEBHOOK_ID = "b81c12d3-4e56-4789-9abc-0def12345601"
 UNWRAP_ID = "fa5a5617-8290-4123-d0e0-412345678905"
 FILTER_ID = "c92d23e4-5f67-4890-abcd-1ef012345602"
 SET_ID = "da3e34f5-6078-4901-bcde-2f0123456703"
+CONVERT_ID = "fc5a5618-8291-4124-d0e1-412345678906"
+IF_ID = "0d6b6729-93a2-4235-e1f2-523456789017"
+HTTP_ID = "1e7c783a-a4b3-4346-f203-634567890128"
 CODE_ID = "eb4f4506-7189-4012-cdef-301234567804"
 
 ASSIGNMENTS = [
@@ -171,14 +181,89 @@ workflow = {
             "parameters": {
                 "mode": "runOnceForAllItems",
                 "language": "javaScript",
-                "jsCode": JS,
+                "jsCode": CONVERT_JS,
+            },
+            "id": CONVERT_ID,
+            "name": "Convert Voice to MP3",
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [1160, 300],
+            "notes": "Voice: OGA laden, ffmpeg → MP3, Binary + presigned MinIO-URLs. Sonst JSON durchreichen (needs_minio_upload=false).",
+        },
+        {
+            "parameters": {
+                "conditions": {
+                    "options": {
+                        "caseSensitive": True,
+                        "leftValue": "",
+                        "typeValidation": "loose",
+                        "version": 2,
+                    },
+                    "conditions": [
+                        {
+                            "id": "need-minio",
+                            "leftValue": "={{ $json.needs_minio_upload }}",
+                            "rightValue": True,
+                            "operator": {
+                                "type": "boolean",
+                                "operation": "true",
+                                "singleValue": True,
+                            },
+                        }
+                    ],
+                    "combinator": "and",
+                },
+                "options": {},
+            },
+            "id": IF_ID,
+            "name": "Voice MP3?",
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.2,
+            "position": [1400, 300],
+            "notes": "Nur Voice mit fertiger MP3 geht in den MinIO-PUT.",
+        },
+        {
+            "parameters": {
+                "method": "PUT",
+                "url": "={{ $json.s3_put_url }}",
+                "sendHeaders": True,
+                "headerParameters": {
+                    "parameters": [{"name": "Content-Type", "value": "audio/mpeg"}]
+                },
+                "sendBody": True,
+                "contentType": "binaryData",
+                "inputDataFieldName": "data",
+                "options": {
+                    "timeout": 60000,
+                    "response": {
+                        "response": {
+                            "fullResponse": True,
+                            "neverError": True,
+                            "responseFormat": "text",
+                        }
+                    },
+                },
+            },
+            "id": HTTP_ID,
+            "name": "Upload MP3 MinIO",
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4.2,
+            "position": [1640, 180],
+            "onError": "continueRegularOutput",
+            "notes": "PUT der MP3 nach MinIO über die presigned URL aus Convert. Close liest statusCode von hier.",
+        },
+        {
+            "parameters": {
+                "mode": "runOnceForAllItems",
+                "language": "javaScript",
+                "jsCode": CLOSE_JS,
             },
             "id": CODE_ID,
             "name": "Create Close WhatsApp Activity",
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
-            "position": [1160, 300],
-            "notes": "Lead per Telefon suchen, Activity anlegen. Voice: OGA→MP3 (ffmpeg), MP3 nach MinIO, signierte URL als Close recording_url.",
+            "position": [1880, 300],
+            "notes": "Liest Webhook/Config aus Convert Voice to MP3. Lead suchen, WhatsApp-Hinweis, Call mit recording_url.",
         },
     ],
     "connections": {
@@ -192,6 +277,18 @@ workflow = {
             "main": [[{"node": "Config", "type": "main", "index": 0}]]
         },
         "Config": {
+            "main": [[{"node": "Convert Voice to MP3", "type": "main", "index": 0}]]
+        },
+        "Convert Voice to MP3": {
+            "main": [[{"node": "Voice MP3?", "type": "main", "index": 0}]]
+        },
+        "Voice MP3?": {
+            "main": [
+                [{"node": "Upload MP3 MinIO", "type": "main", "index": 0}],
+                [{"node": "Create Close WhatsApp Activity", "type": "main", "index": 0}],
+            ]
+        },
+        "Upload MP3 MinIO": {
             "main": [[{"node": "Create Close WhatsApp Activity", "type": "main", "index": 0}]]
         },
     },

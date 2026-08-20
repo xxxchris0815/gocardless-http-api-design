@@ -40,8 +40,11 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 1. **WhatsApp Webhook** (POST `/whatsapp-close`) — Evolution schickt Nachrichten hierhin. Antwortet sofort mit 200, damit Evolution nicht in Timeouts läuft.
 2. **Unwrap Evolution Body** — holt `event`/`data` aus n8n-`headers`+`body`-Arrays
 3. **Message Events Only** — nur `send.message` und `messages.upsert`
-4. **Config** — Close-Key (die WhatsApp-Nummer kommt von Evolution)
-5. **Create Close WhatsApp Activity** — Instanz-Nummer per `GET /instance/fetchInstances`, Lead suchen, Activity, bei Incoming Task. Bei Voice: S3-OGA → MP3 → Close-`recording_url`.
+4. **Config** — Close-Key und MinIO-Keys (die WhatsApp-Nummer kommt von Evolution)
+5. **Convert Voice to MP3** — nur bei Voice: OGA laden, ffmpeg → MP3, Binary + presigned MinIO-URLs. Sonst JSON durchreichen.
+6. **Voice MP3?** — IF: `needs_minio_upload`
+7. **Upload MP3 MinIO** — HTTP Request PUT der MP3 (nur Voice-Zweig)
+8. **Create Close WhatsApp Activity** — Instanz-Nummer per `GET /instance/fetchInstances`, Lead suchen, Activity, bei Incoming Task. Bei Voice: Call mit `recording_url` = MinIO-GET-URL.
 
 Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den Call-Player keine zweite n8n-URL.
 
@@ -52,11 +55,10 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 - Incoming: zuständiger User zuerst aus dem Custom Field, sonst letzte **Outbound**-Activity, sonst WA-/Call-History
 - Outgoing: Close-User aus `/me/`
 - Bilder, Video, GIF, Dokument, Sticker: öffentliche Evolution-`mediaUrl` (S3, mit `X-Amz-Signature`) als Markdown-Link in der WhatsApp-Activity. Nur wenn die URL fehlt: Evolution `getBase64FromMediaMessage` → Close Files
-- Voice:
-  1. WhatsApp-Activity als **Hinweis** mit S3-Abspiel-Link (Original `.oga`)
-  2. **ffmpeg** wandelt OGA nach MP3
-  3. MP3 wird nach **MinIO** gelegt (neben die OGA, `.mp3`), signierte GET-URL (7 Tage)
-  4. Close-Call mit `recording_url` = diese MP3-URL
+- Voice (drei Nodes, nicht ein Mega-Script):
+  1. **Convert Voice to MP3**: OGA von Evolution-S3 laden, ffmpeg → MP3, Binary `data`, `s3_put_url` / `s3_get_url`
+  2. **Upload MP3 MinIO**: HTTP Request PUT nach MinIO (dieselben Keys wie Evolution)
+  3. **Create Close WhatsApp Activity**: Lead finden, WhatsApp-Hinweis mit S3-Link, Call mit `recording_url` = signierte MP3-GET-URL (7 Tage)
 - Close-Files-Upload für Voice entfällt (HTTP 400 / Login-URLs). Close holt die MinIO-URL ohne Login und spielt nur MP3.
 - n8n-Container braucht `ffmpeg` (libmp3lame) und `NODE_FUNCTION_ALLOW_BUILTIN=child_process`.
 - MinIO-Keys in Config: dieselben wie Evolution (`S3_ACCESS_KEY` / `S3_SECRET_KEY`). Endpoint und Bucket kommen aus `mediaUrl`, wenn die Config-Felder leer sind.
@@ -82,7 +84,7 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 
 In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** Close-Key **und** MinIO-Keys eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
-Nach dem Import eine **neue** Sprachnachricht testen. Logs: `Step 7a: MP3 erzeugt` und `Step 7b: MP3 nach MinIO`. `recording_url` muss auf eure MinIO-Domain zeigen, Datei `.mp3`, Query mit `X-Amz-Signature`.
+Nach dem Import eine **neue** Sprachnachricht testen. Execution: Convert (`Convert: MP3 erzeugt`) → HTTP PUT (Status 200) → Close (`Step 7: recording_url von MinIO`). `recording_url` muss auf eure MinIO-Domain zeigen, Datei `.mp3`, Query mit `X-Amz-Signature`.
 
 ```bash
 cd n8n-whatsapp-close

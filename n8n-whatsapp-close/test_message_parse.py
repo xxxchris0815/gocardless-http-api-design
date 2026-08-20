@@ -455,6 +455,8 @@ class MinioUrlTests(unittest.TestCase):
 class JsSmokeTests(unittest.TestCase):
     def test_n8n_script_is_evolution_only(self):
         js = Path(__file__).with_name("whatsapp_to_close.js").read_text(encoding="utf-8")
+        convert = Path(__file__).with_name("voice_convert_main.js").read_text(encoding="utf-8")
+        blob = js + convert
         self.assertIn("send.message", js)
         self.assertIn("messages.upsert", js)
         self.assertIn("whatsapp_message", js)
@@ -498,10 +500,14 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("tryFfmpegToMp3", js)
         self.assertIn("needsMp3ForCloseRecording", js)
         self.assertIn("audio/mpeg", js)
-        self.assertIn("Close zeigt im Call-Player nur MP3", js)
-        self.assertIn("uploadMp3ToMinio", js)
+        self.assertIn("Close zeigt im Call-Player nur MP3", blob)
+        self.assertIn("prepareMinioMp3Upload", js)
+        self.assertIn("presignMinioPut", js)
+        self.assertIn('jsonFromNamed("Convert Voice to MP3")', js)
+        self.assertIn('jsonFromNamed("Upload MP3 MinIO")', js)
         self.assertIn("parseS3MediaUrl", js)
         self.assertIn("s3_access_key", js)
+        self.assertNotIn("uploadMp3ToMinio", js)
 
     def test_generated_workflow_has_single_post_webhook(self):
         data = json.loads(Path(__file__).with_name("WhatsApp_Close_Activity.json").read_text(encoding="utf-8"))
@@ -509,13 +515,41 @@ class JsSmokeTests(unittest.TestCase):
         self.assertEqual(len(webhooks), 1)
         self.assertEqual(webhooks[0]["parameters"]["path"], "whatsapp-close")
         self.assertEqual(webhooks[0]["parameters"]["httpMethod"], "POST")
+        names = [n["name"] for n in data["nodes"]]
+        self.assertIn("Convert Voice to MP3", names)
+        self.assertIn("Voice MP3?", names)
+        self.assertIn("Upload MP3 MinIO", names)
+        self.assertIn("Create Close WhatsApp Activity", names)
+        by_name = {n["name"]: n for n in data["nodes"]}
+        convert_js = by_name["Convert Voice to MP3"]["parameters"]["jsCode"]
+        close_js = by_name["Create Close WhatsApp Activity"]["parameters"]["jsCode"]
+        http = by_name["Upload MP3 MinIO"]
+        self.assertIn("Convert: MP3 erzeugt", convert_js)
+        self.assertIn("prepareBinaryData", convert_js)
+        self.assertIn("needs_minio_upload", convert_js)
+        self.assertNotIn("activity/call", convert_js)
+        self.assertIn("activity/call", close_js)
+        self.assertIn('jsonFromNamed("Convert Voice to MP3")', close_js)
+        self.assertEqual(http["parameters"]["method"], "PUT")
+        self.assertEqual(http["parameters"]["contentType"], "binaryData")
+        self.assertEqual(http["parameters"]["inputDataFieldName"], "data")
+        self.assertIn("s3_put_url", http["parameters"]["url"])
+        self.assertEqual(
+            data["connections"]["Voice MP3?"]["main"][0][0]["node"],
+            "Upload MP3 MinIO",
+        )
+        self.assertEqual(
+            data["connections"]["Voice MP3?"]["main"][1][0]["node"],
+            "Create Close WhatsApp Activity",
+        )
         blob = json.dumps(data)
         self.assertNotIn("whatsapp-close-recording", blob)
         self.assertNotIn("$getWorkflowStaticData", blob)
         self.assertIn("resolvePublicRecordingUrl", blob)
         self.assertIn("firstPublicMediaUrl", blob)
         self.assertIn("tryFfmpegToMp3", blob)
-        self.assertIn("uploadMp3ToMinio", blob)
+        self.assertIn("prepareMinioMp3Upload", blob)
+        self.assertNotIn("uploadMp3ToMinio", blob)
 
 
 if __name__ == "__main__":

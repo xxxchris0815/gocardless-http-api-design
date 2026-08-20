@@ -7,14 +7,15 @@
  *  1. Webhook-Node (POST /whatsapp-close), Response: Immediately
  *  2. Optional Filter: event ist send.message oder messages.upsert
  *  3. Set-Node mit Config, Include Other Input Fields = an
- *  4. Dieser Code-Node: Run Once for All Items, JavaScript
+ *  4. Code-Node "Convert Voice to MP3" (ffmpeg, Binary + Presign)
+ *  5. HTTP-Request "Upload MP3 MinIO" (PUT, nur wenn needs_minio_upload)
+ *  6. Dieser Code-Node: Lead suchen, WhatsApp-Activity, Call mit recording_url
  *
  * Medien: Evolution legt eine öffentliche S3-mediaUrl in data.message.mediaUrl.
  * Voice/Call: Close-Player akzeptiert nur MP3. Ablauf:
- *  1. OGA von Evolution-S3 laden
- *  2. ffmpeg → MP3
- *  3. MP3 nach MinIO legen (dieselben Keys wie Evolution)
- *  4. signierte GET-URL als Close recording_url
+ *  1. Convert-Node: OGA laden, ffmpeg → MP3, presigned PUT/GET
+ *  2. HTTP-Request: MP3 nach MinIO PUT
+ *  3. Dieser Node: Lead finden, Hinweis-Activity, Call mit s3_get_url
  * Andere Medien: S3-Link in der WhatsApp-Activity.
  *
  * Config:
@@ -63,12 +64,27 @@ const httpHelper = (() => {
   return null;
 })();
 
-const inputItem = $input.first().json || {};
+let inputItem = $input.first() ? $input.first().json || {} : {};
 const logs = [];
 
 function log(msg) {
   logs.push(String(msg));
   console.log(msg);
+}
+
+function jsonFromNamed(name) {
+  try {
+    if (typeof $ === "function") {
+      const ref = $(name);
+      if (ref && typeof ref.first === "function") {
+        const first = ref.first();
+        return (first && first.json) || {};
+      }
+    }
+  } catch (e) {
+    /* node not in this execution */
+  }
+  return {};
 }
 
 function envGet(key) {
@@ -424,7 +440,34 @@ async function presignMinioGet({ endpoint, bucket, key, accessKey, secretKey, re
   return `${s3ObjectUrl(endpoint, bucket, key)}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
-async function uploadMp3ToMinio({ mediaUrl, mp3, msgId, accessKey, secretKey, region, endpointCfg, bucketCfg }) {
+async function presignMinioPut({ endpoint, bucket, key, accessKey, secretKey, region, expires, contentType }) {
+  const { amzDate, dateStamp } = amzTimestamps();
+  const host = s3Host(endpoint);
+  const canonicalUri = s3CanonicalUri(bucket, key);
+  const scope = `${dateStamp}/${region}/s3/aws4_request`;
+  const credential = `${accessKey}/${scope}`;
+  const ct = String(contentType || "audio/mpeg").trim().toLowerCase();
+  const signedHeaders = "content-type;host";
+  const query = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": credential,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": String(expires || 600),
+    "X-Amz-SignedHeaders": signedHeaders,
+  };
+  const canonicalQuery = Object.keys(query)
+    .sort()
+    .map((k) => `${awsUriEncode(k, true)}=${awsUriEncode(query[k], true)}`)
+    .join("&");
+  const canonicalHeaders = `content-type:${ct}\nhost:${host}\n`;
+  const canonicalRequest = ["PUT", canonicalUri, canonicalQuery, canonicalHeaders, signedHeaders, "UNSIGNED-PAYLOAD"].join("\n");
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, await sha256Hex(canonicalRequest)].join("\n");
+  const signingKey = await awsSigningKey(secretKey, dateStamp, region, "s3");
+  const signature = bytesToHex(await hmacSha256(signingKey, stringToSign));
+  return `${s3ObjectUrl(endpoint, bucket, key)}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+}
+
+async function prepareMinioMp3Upload({ mediaUrl, msgId, accessKey, secretKey, region, endpointCfg, bucketCfg }) {
   const parsedS3 = parseS3MediaUrl(mediaUrl);
   const endpoint = String(endpointCfg || (parsedS3 && parsedS3.endpoint) || "").replace(/\/+$/, "");
   const bucket = String(bucketCfg || (parsedS3 && parsedS3.bucket) || "").trim();
@@ -435,21 +478,16 @@ async function uploadMp3ToMinio({ mediaUrl, mp3, msgId, accessKey, secretKey, re
     throw new Error("s3_access_key / s3_secret_key fehlen in Config (MinIO-Keys wie bei Evolution)");
   }
   const key = mp3KeyFromSource(parsedS3 && parsedS3.key, msgId);
-  const putRes = await putMinioObject({
+  const putUrl = await presignMinioPut({
     endpoint,
     bucket,
     key,
-    body: mp3,
     accessKey,
     secretKey,
     region: region || "us-east-1",
-    contentType: "audio/mpeg",
+    expires: 600,
   });
-  if (putRes.status !== 200 && putRes.status !== 204) {
-    const detail = typeof putRes.data === "string" ? putRes.data.slice(0, 180) : "";
-    throw new Error(`MinIO PUT HTTP ${putRes.status}${detail ? `: ${detail}` : ""}`);
-  }
-  const url = await presignMinioGet({
+  const getUrl = await presignMinioGet({
     endpoint,
     bucket,
     key,
@@ -458,7 +496,7 @@ async function uploadMp3ToMinio({ mediaUrl, mp3, msgId, accessKey, secretKey, re
     region: region || "us-east-1",
     expires: 604800,
   });
-  return { url, bucket, key };
+  return { putUrl, getUrl, bucket, key };
 }
 
 function filenameForMedia(kind, mime, given) {
@@ -1279,6 +1317,14 @@ function result(extra) {
 }
 
 async function main() {
+  const fromConvert = jsonFromNamed("Convert Voice to MP3");
+  if (
+    fromConvert &&
+    (fromConvert.body || fromConvert.event || fromConvert.needs_minio_upload !== undefined)
+  ) {
+    inputItem = fromConvert;
+  }
+
   const closeApiKey = String(pick("close_api_key", "CLOSE_API_KEY", "")).trim();
   const auth = closeAuthHeader(closeApiKey);
   const closeHeaders = { Authorization: auth, Accept: "application/json" };
@@ -1309,11 +1355,6 @@ async function main() {
   const shouldCreateTask = pickBool("create_task", "WA_CREATE_TASK", true);
   const configLocalPhone = cleanPhone(pick("my_whatsapp_number", "MY_WHATSAPP_NUMBER", ""));
   const shouldUploadMedia = pickBool("upload_media", "WA_UPLOAD_MEDIA", true);
-  const s3AccessKey = String(pick("s3_access_key", "S3_ACCESS_KEY", "")).trim();
-  const s3SecretKey = String(pick("s3_secret_key", "S3_SECRET_KEY", "")).trim();
-  const s3Region = String(pick("s3_region", "S3_REGION", "us-east-1")).trim() || "us-east-1";
-  const s3EndpointCfg = String(pick("s3_endpoint", "S3_ENDPOINT", "")).trim();
-  const s3BucketCfg = String(pick("s3_bucket", "S3_BUCKET", "")).trim();
 
   let payloads = [];
   try {
@@ -1603,82 +1644,29 @@ async function main() {
   let voiceRecordingUrl = "";
 
   if (isVoice) {
-    try {
-      let source = null;
-      if (parsed.media_url) {
-        source = {
-          buffer: await downloadBinary(parsed.media_url),
-          mimetype: parsed.mimetype || "audio/ogg",
-          fileName: filenameFromUrl(parsed.media_url) || "voice.oga",
-        };
-        log(`Step 7: S3-Audio geladen (${source.buffer.length} bytes, ${source.fileName})`);
-      } else if (shouldUploadMedia && evolutionBase && evolutionKey && parsed.instance) {
-        source = await fetchEvolutionMedia({
-          baseUrl: evolutionBase,
-          apiKey: evolutionKey,
-          instance: parsed.instance,
-          key: parsed.raw_key || { id: parsed.id },
-          message: parsed.raw_message,
-          convertAudio: true,
-        });
-        log(`Step 7: Evolution-Audio geladen (${source.buffer.length} bytes, ${source.mimetype})`);
+    const convertJson = jsonFromNamed("Convert Voice to MP3");
+    voiceRecordingUrl = convertJson.s3_get_url || inputItem.s3_get_url || "";
+    mediaUploadError = convertJson.media_upload_error || inputItem.media_upload_error || "";
+    if (convertJson.convert_logs && convertJson.convert_logs.length) {
+      convertJson.convert_logs.forEach((line) => log(line));
+    }
+    if (convertJson.needs_minio_upload || inputItem.needs_minio_upload) {
+      const up = jsonFromNamed("Upload MP3 MinIO");
+      const status = Number(up.statusCode || up.status || (up.body && up.body.statusCode) || 0);
+      if (status >= 400) {
+        voiceRecordingUrl = "";
+        mediaUploadError = `MinIO PUT HTTP ${status}`;
+        log(`Step 7: ${mediaUploadError}`);
+      } else if (status > 0 && voiceRecordingUrl) {
+        log(`Step 7: recording_url von MinIO (${voiceRecordingUrl.split("?")[0]}, PUT ${status})`);
+      } else if (voiceRecordingUrl) {
+        log(`Step 7: recording_url von MinIO (${voiceRecordingUrl.split("?")[0]}, PUT-Status unbekannt)`);
       } else {
-        mediaUploadError = "Keine Audio-Quelle für MP3-Konvertierung";
+        mediaUploadError = mediaUploadError || "MinIO PUT ohne recording_url";
         log(`Step 7: ${mediaUploadError}`);
       }
-
-      if (source && source.buffer && source.buffer.length) {
-        if (source.buffer.length > MAX_MEDIA_BYTES) {
-          mediaUploadError = `Datei zu groß (${source.buffer.length} bytes)`;
-          log(`Step 7: Media übersprungen (${mediaUploadError})`);
-        } else {
-          let mp3 = isMp3Audio(source.buffer, source.mimetype, source.fileName)
-            ? source.buffer
-            : tryFfmpegToMp3(source.buffer);
-          if (!mp3 && parsed.media_url && evolutionBase && evolutionKey && parsed.instance) {
-            try {
-              const converted = await fetchEvolutionMedia({
-                baseUrl: evolutionBase,
-                apiKey: evolutionKey,
-                instance: parsed.instance,
-                key: parsed.raw_key || { id: parsed.id },
-                message: parsed.raw_message,
-                convertAudio: true,
-              });
-              if (converted && converted.buffer) {
-                log(`Step 7: Evolution convertToMp4 (${converted.mimetype || "?"}, ${converted.buffer.length} bytes)`);
-                mp3 = isMp3Audio(converted.buffer, converted.mimetype, converted.fileName)
-                  ? converted.buffer
-                  : tryFfmpegToMp3(converted.buffer);
-              }
-            } catch (e) {
-              log(`Step 7: Evolution-Konvertierung: ${e.message || e}`);
-            }
-          }
-          if (mp3) {
-            log(`Step 7a: MP3 erzeugt (${mp3.length} bytes)`);
-            const uploaded = await uploadMp3ToMinio({
-              mediaUrl: parsed.media_url || "",
-              mp3,
-              msgId: parsed.id,
-              accessKey: s3AccessKey,
-              secretKey: s3SecretKey,
-              region: s3Region,
-              endpointCfg: s3EndpointCfg,
-              bucketCfg: s3BucketCfg,
-            });
-            voiceRecordingUrl = uploaded.url;
-            log(`Step 7b: MP3 nach MinIO ${uploaded.bucket}/${uploaded.key}`);
-          } else {
-            mediaUploadError =
-              "Close zeigt im Call-Player nur MP3, keine OGA/OGG/Opus. ffmpeg auf dem n8n-Host fehlt oder die Konvertierung ist fehlgeschlagen.";
-            log(`Step 7: ${mediaUploadError}`);
-          }
-        }
-      }
-    } catch (e) {
-      mediaUploadError = String(e.message || e);
-      log(`Step 7: Voice-MP3 fehlgeschlagen: ${mediaUploadError}`);
+    } else if (mediaUploadError) {
+      log(`Step 7: ${mediaUploadError}`);
     }
   } else {
     const needBinaryUpload = shouldUploadMedia && needsMediaUpload(parsed.type) && !parsed.media_url;
