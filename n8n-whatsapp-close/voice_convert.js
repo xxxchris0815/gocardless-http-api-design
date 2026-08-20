@@ -4,7 +4,8 @@
  * Nur Audio → MP3. JSON durchreichen, Binary `data` = voice.mp3.
  * Kein MinIO, kein Close.
  *
- * ffmpeg: OGA/Opus/WebM, Probe für Pipes ohne Header, libmp3lame.
+ * ffmpeg: OGA/Opus/WebM → MPEG-1 Layer III (44.1 kHz, 64k CBR).
+ * Close-HTML5-Player spielt 16 kHz / MPEG-2.5 oft nicht ("Unable to play audio file").
  * n8n: NODE_FUNCTION_ALLOW_BUILTIN=child_process, ffmpeg mit libmp3lame.
  */
 
@@ -133,18 +134,34 @@ function ffmpegToMp3(buffer) {
   const probe = ["-analyzeduration", "20000000", "-probesize", "20000000"];
   const out = [
     "-vn",
+    "-map_metadata",
+    "-1",
     "-ac",
     "1",
     "-ar",
-    "16000",
+    "44100",
     "-c:a",
     "libmp3lame",
     "-b:a",
-    "32k",
+    "64k",
     "-id3v2_version",
-    "3",
+    "0",
     "-write_xing",
+    "0",
+    "-f",
+    "mp3",
+    "pipe:1",
+  ];
+  const outSimple = [
+    "-vn",
+    "-ac",
     "1",
+    "-ar",
+    "44100",
+    "-c:a",
+    "libmp3lame",
+    "-b:a",
+    "64k",
     "-f",
     "mp3",
     "pipe:1",
@@ -178,20 +195,7 @@ function ffmpegToMp3(buffer) {
       "+genpts+discardcorrupt",
       "-i",
       "pipe:0",
-      "-vn",
-      "-ac",
-      "1",
-      "-ar",
-      "22050",
-      "-c:a",
-      "libmp3lame",
-      "-b:a",
-      "48k",
-      "-id3v2_version",
-      "3",
-      "-f",
-      "mp3",
-      "pipe:1",
+      ...outSimple,
     ],
   ];
   for (let i = 0; i < attempts.length; i++) {
@@ -241,7 +245,7 @@ async function main() {
       return [{ json: outJson }];
     }
 
-    const mp3 = looksLikeMp3(buffer) ? buffer : ffmpegToMp3(buffer);
+    const mp3 = ffmpegToMp3(buffer) || (looksLikeMp3(buffer) ? buffer : null);
     if (!mp3) {
       outJson.media_upload_error = "ffmpeg fehlt oder Konvertierung fehlgeschlagen";
       outJson.convert_logs = logs.slice();

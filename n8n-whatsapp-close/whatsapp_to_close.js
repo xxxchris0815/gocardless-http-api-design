@@ -241,8 +241,8 @@ function tryFfmpegToMp3(buffer) {
     return null;
   }
   const attempts = [
-    ["-y", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "16000", "-codec:a", "libmp3lame", "-b:a", "32k", "-f", "mp3", "pipe:1"],
-    ["-y", "-hide_banner", "-loglevel", "error", "-f", "ogg", "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "16000", "-codec:a", "libmp3lame", "-b:a", "32k", "-f", "mp3", "pipe:1"],
+    ["-y", "-hide_banner", "-loglevel", "error", "-i", "pipe:0", "-vn", "-map_metadata", "-1", "-ac", "1", "-ar", "44100", "-codec:a", "libmp3lame", "-b:a", "64k", "-id3v2_version", "0", "-write_xing", "0", "-f", "mp3", "pipe:1"],
+    ["-y", "-hide_banner", "-loglevel", "error", "-f", "ogg", "-i", "pipe:0", "-vn", "-ac", "1", "-ar", "44100", "-codec:a", "libmp3lame", "-b:a", "64k", "-f", "mp3", "pipe:1"],
   ];
   for (let i = 0; i < attempts.length; i++) {
     try {
