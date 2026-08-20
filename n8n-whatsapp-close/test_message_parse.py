@@ -18,6 +18,7 @@ from message_parse import (
     phone_search_variants,
     pick_responsible_user,
     public_media_url,
+    force_https,
     is_public_recording_url,
     needs_mp3_for_close_recording,
     parse_s3_media_url,
@@ -415,6 +416,12 @@ class RecordingUrlTests(unittest.TestCase):
                 "https://s3.example.com/evolution/voice.oga?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=abc"
             )
         )
+        self.assertEqual(
+            force_https("http://s3.example.com/evolution/voice.mp3?X-Amz-Signature=abc"),
+            "https://s3.example.com/evolution/voice.mp3?X-Amz-Signature=abc",
+        )
+        self.assertFalse(is_public_recording_url("http://s3.example.com/a.mp3?X-Amz-Signature=abc"))
+        self.assertEqual(force_https("https://s3.example.com/a.mp3"), "https://s3.example.com/a.mp3")
 
 
 class CloseMp3Tests(unittest.TestCase):
@@ -456,6 +463,7 @@ class JsSmokeTests(unittest.TestCase):
     def test_n8n_script_is_evolution_only(self):
         js = Path(__file__).with_name("whatsapp_to_close.js").read_text(encoding="utf-8")
         convert = Path(__file__).with_name("voice_convert.js").read_text(encoding="utf-8")
+        presign = Path(__file__).with_name("minio_presign.js").read_text(encoding="utf-8")
         self.assertIn("send.message", js)
         self.assertIn("messages.upsert", js)
         self.assertIn("whatsapp_message", js)
@@ -510,6 +518,7 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("ffmpeg fehlt oder Konvertierung fehlgeschlagen", convert)
         self.assertIn("prepareMinioMp3Upload", js)
         self.assertIn("presignMinioPut", js)
+        self.assertIn("forceHttps", presign)
         self.assertIn("presignedUrl", js)
         self.assertIn("inputItem.presignedUrl", js)
         self.assertNotIn('jsonFromNamed("Convert Voice to MP3")', js)
@@ -548,7 +557,8 @@ class JsSmokeTests(unittest.TestCase):
         self.assertNotIn("s3_put_url", convert_js)
         self.assertIn("s3_put_url", presign_js)
         self.assertIn("presignedUrl", presign_js)
-        self.assertIn("$('Config').first().json", presign_js)
+        self.assertIn("forceHttps", presign_js)
+        self.assertIn("getEndpoint", presign_js)
         self.assertIn("X-Amz-Signature", presign_js)
         self.assertIn("activity/call", close_js)
         self.assertIn("inputItem.presignedUrl", close_js)

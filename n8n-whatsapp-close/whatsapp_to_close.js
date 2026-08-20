@@ -1633,6 +1633,9 @@ async function main() {
 
   if (isVoice) {
     voiceRecordingUrl = String(inputItem.presignedUrl || "").trim();
+    if (/^http:\/\//i.test(voiceRecordingUrl)) {
+      voiceRecordingUrl = `https://${voiceRecordingUrl.slice(7)}`;
+    }
     if (voiceRecordingUrl) log(`Step 7: recording_url ${voiceRecordingUrl.split("?")[0]}`);
   } else {
     const needBinaryUpload = shouldUploadMedia && needsMediaUpload(parsed.type) && !parsed.media_url;

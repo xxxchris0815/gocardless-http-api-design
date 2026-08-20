@@ -80,13 +80,13 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 | `evolution_api_key` | Evolution-`apikey`. Fallback: `apikey` aus dem originalen Webhook |
 | `upload_media` | `true`/`false`, Default `true`. Nur Fallback, wenn im Webhook **keine** öffentliche `mediaUrl` steckt. |
 | `s3_access_key` / `s3_secret_key` | MinIO-Zugang, **dieselben Keys wie Evolution**. Nicht committen. |
-| `s3_endpoint` | Optional, z. B. `https://s3.example.com`. Leer = Host aus `mediaUrl`. |
+| `s3_endpoint` | Optional. Für den **PUT** aus n8n, z. B. `http://minio:9000`. Close braucht **https** — die GET-`presignedUrl` kommt von der öffentlichen `mediaUrl` (`https://s3.…`). |
 | `s3_bucket` | Optional. Leer = erster Pfadteil der `mediaUrl` (`evolution`). |
 | `s3_region` | Default `us-east-1` (wie Evolution/MinIO). |
 
 In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** Close-Key **und** MinIO-Keys eintragen. Close und MinIO-Presign lesen die Keys per `$('Config').first().json.close_api_key` (nicht aus dem Input des jeweiligen Nodes). Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
-Nach dem Import eine **neue** Sprachnachricht testen. Close muss `$json.presignedUrl` vom vorherigen Step haben (signierte MinIO-GET-URL der MP3).
+Nach dem Import eine **neue** Sprachnachricht testen. Close muss `$json.presignedUrl` mit **https://** haben (Close lehnt `http://` ab). MinIO intern darf HTTP bleiben; Caddy/`s3.…` terminiert TLS. Evolution: öffentliche mediaUrl mit `https://s3.…`, nicht `http://minio:9000`.
 
 ```bash
 cd n8n-whatsapp-close

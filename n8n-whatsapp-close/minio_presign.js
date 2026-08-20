@@ -140,6 +140,12 @@ function s3Host(endpoint) {
   return new URL(endpoint).host;
 }
 
+function forceHttps(url) {
+  const raw = String(url || "").trim();
+  if (/^http:\/\//i.test(raw)) return `https://${raw.slice(7)}`;
+  return raw;
+}
+
 function s3ObjectUrl(endpoint, bucket, key) {
   const base = String(endpoint).replace(/\/+$/, "");
   return `${base}/${awsUriEncode(bucket, true)}/${awsUriEncode(key, false)}`;
@@ -188,17 +194,18 @@ async function main() {
   try {
     const mediaUrl = pick(inputItem, "voice_media_url") || pick(inputItem, "media_url");
     const parsedS3 = parseS3MediaUrl(mediaUrl);
-    const endpoint = (pickConfig("s3_endpoint") || (parsedS3 && parsedS3.endpoint) || "").replace(/\/+$/, "");
+    const putEndpoint = (pickConfig("s3_endpoint") || (parsedS3 && parsedS3.endpoint) || "").replace(/\/+$/, "");
+    const getEndpoint = forceHttps((parsedS3 && parsedS3.endpoint) || putEndpoint).replace(/\/+$/, "");
     const bucket = (pickConfig("s3_bucket") || (parsedS3 && parsedS3.bucket) || "").trim();
     const accessKey = pickConfig("s3_access_key").trim();
     const secretKey = pickConfig("s3_secret_key").trim();
     const region = pickConfig("s3_region", "us-east-1") || "us-east-1";
-    if (!endpoint || !bucket) throw new Error("s3_endpoint / s3_bucket fehlen (oder mediaUrl ohne Bucket-Pfad)");
+    if (!putEndpoint || !bucket) throw new Error("s3_endpoint / s3_bucket fehlen (oder mediaUrl ohne Bucket-Pfad)");
     if (!accessKey || !secretKey) throw new Error("s3_access_key / s3_secret_key fehlen in Config");
     const key = mp3KeyFromSource(parsedS3 && parsedS3.key, pick(inputItem, "voice_msg_id"));
     const putUrl = await presign({
       method: "PUT",
-      endpoint,
+      endpoint: putEndpoint,
       bucket,
       key,
       accessKey,
@@ -210,7 +217,7 @@ async function main() {
     });
     const getUrl = await presign({
       method: "GET",
-      endpoint,
+      endpoint: getEndpoint,
       bucket,
       key,
       accessKey,

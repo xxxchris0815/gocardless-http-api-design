@@ -156,6 +156,14 @@ def is_close_app_file_url(url: Optional[str]) -> bool:
     return "close.com/go/file" in raw.lower()
 
 
+def force_https(url: Optional[str]) -> str:
+    """Close recording_url must be https; MinIO itself often speaks http behind Caddy."""
+    raw = str(url or "").strip()
+    if raw.lower().startswith("http://"):
+        return "https://" + raw[7:]
+    return raw
+
+
 def is_public_recording_url(url: Optional[str]) -> bool:
     """Close fetches recording_url without auth; only signed S3/CloudFront URLs work."""
     raw = str(url or "").strip()
