@@ -246,9 +246,10 @@ workflow = {
                     "timeout": 60000,
                     "response": {
                         "response": {
-                            "fullResponse": True,
+                            "fullResponse": False,
                             "neverError": True,
                             "responseFormat": "text",
+                            "outputPropertyName": "minio_put",
                         }
                     },
                 },
@@ -259,7 +260,7 @@ workflow = {
             "typeVersion": 4.2,
             "position": [1880, 180],
             "onError": "continueRegularOutput",
-            "notes": "PUT der MP3 nach MinIO über die presigned URL aus Prepare MinIO Upload.",
+            "notes": "PUT der MP3. Original-JSON inkl. presignedUrl bleibt erhalten (Antwort in minio_put).",
         },
         {
             "parameters": {
@@ -272,7 +273,7 @@ workflow = {
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [2120, 300],
-            "notes": "Liest Webhook aus Convert Voice to MP3, recording_url aus Prepare MinIO Upload. Lead suchen, WhatsApp-Hinweis, Call.",
+            "notes": "Lead suchen, WhatsApp-Hinweis, Call. recording_url = $json.presignedUrl vom vorherigen Step.",
         },
     ],
     "connections": {

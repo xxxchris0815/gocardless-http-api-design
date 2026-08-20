@@ -10,13 +10,14 @@
  *  4. Code-Node "Convert Voice to MP3" (nur ffmpeg → Binary)
  *  5. Code-Node "Prepare MinIO Upload" (presigned PUT/GET)
  *  6. HTTP-Request "Upload MP3 MinIO"
- *  7. Dieser Code-Node: Lead suchen, WhatsApp-Activity, Call mit recording_url
+ *  7. Dieser Code-Node: Lead suchen, WhatsApp-Activity, Call.
+ *     recording_url = $input.first().json.presignedUrl (MinIO-GET der MP3)
  *
  * Medien: Evolution legt eine öffentliche S3-mediaUrl in data.message.mediaUrl.
  * Voice/Call: Close-Player akzeptiert nur MP3. Ablauf:
  *  1. Convert: OGA laden, ffmpeg → MP3 Binary
- *  2. Presign + HTTP PUT nach MinIO
- *  3. Dieser Node: Lead finden, Hinweis-Activity, Call mit s3_get_url
+ *  2. Presign + HTTP PUT nach MinIO (JSON behält presignedUrl)
+ *  3. Dieser Node: Lead finden, Hinweis-Activity, Call mit presignedUrl
  * Andere Medien: S3-Link in der WhatsApp-Activity.
  *
  * Config:
@@ -71,21 +72,6 @@ const logs = [];
 function log(msg) {
   logs.push(String(msg));
   console.log(msg);
-}
-
-function jsonFromNamed(name) {
-  try {
-    if (typeof $ === "function") {
-      const ref = $(name);
-      if (ref && typeof ref.first === "function") {
-        const first = ref.first();
-        return (first && first.json) || {};
-      }
-    }
-  } catch (e) {
-    /* node not in this execution */
-  }
-  return {};
 }
 
 function envGet(key) {
@@ -1318,14 +1304,6 @@ function result(extra) {
 }
 
 async function main() {
-  const fromConvert = jsonFromNamed("Convert Voice to MP3");
-  if (
-    fromConvert &&
-    (fromConvert.body || fromConvert.event || fromConvert.needs_minio_upload !== undefined)
-  ) {
-    inputItem = fromConvert;
-  }
-
   const closeApiKey = String(pick("close_api_key", "CLOSE_API_KEY", "")).trim();
   const auth = closeAuthHeader(closeApiKey);
   const closeHeaders = { Authorization: auth, Accept: "application/json" };
@@ -1645,35 +1623,8 @@ async function main() {
   let voiceRecordingUrl = "";
 
   if (isVoice) {
-    const convertJson = jsonFromNamed("Convert Voice to MP3");
-    const presignJson = jsonFromNamed("Prepare MinIO Upload");
-    voiceRecordingUrl = presignJson.s3_get_url || convertJson.s3_get_url || inputItem.s3_get_url || "";
-    mediaUploadError =
-      presignJson.media_upload_error || convertJson.media_upload_error || inputItem.media_upload_error || "";
-    if (convertJson.convert_logs && convertJson.convert_logs.length) {
-      convertJson.convert_logs.forEach((line) => log(line));
-    }
-    if (presignJson.presign_logs && presignJson.presign_logs.length) {
-      presignJson.presign_logs.forEach((line) => log(line));
-    }
-    if (convertJson.needs_minio_upload || inputItem.needs_minio_upload) {
-      const up = jsonFromNamed("Upload MP3 MinIO");
-      const status = Number(up.statusCode || up.status || (up.body && up.body.statusCode) || 0);
-      if (status >= 400) {
-        voiceRecordingUrl = "";
-        mediaUploadError = `MinIO PUT HTTP ${status}`;
-        log(`Step 7: ${mediaUploadError}`);
-      } else if (status > 0 && voiceRecordingUrl) {
-        log(`Step 7: recording_url von MinIO (${voiceRecordingUrl.split("?")[0]}, PUT ${status})`);
-      } else if (voiceRecordingUrl) {
-        log(`Step 7: recording_url von MinIO (${voiceRecordingUrl.split("?")[0]}, PUT-Status unbekannt)`);
-      } else {
-        mediaUploadError = mediaUploadError || "MinIO PUT ohne recording_url";
-        log(`Step 7: ${mediaUploadError}`);
-      }
-    } else if (mediaUploadError) {
-      log(`Step 7: ${mediaUploadError}`);
-    }
+    voiceRecordingUrl = String(inputItem.presignedUrl || "").trim();
+    if (voiceRecordingUrl) log(`Step 7: recording_url ${voiceRecordingUrl.split("?")[0]}`);
   } else {
     const needBinaryUpload = shouldUploadMedia && needsMediaUpload(parsed.type) && !parsed.media_url;
     if (parsed.media_url && needsMediaUpload(parsed.type) && !needBinaryUpload) {

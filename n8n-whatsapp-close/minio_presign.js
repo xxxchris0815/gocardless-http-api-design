@@ -167,7 +167,7 @@ async function presign({ method, endpoint, bucket, key, accessKey, secretKey, re
 async function main() {
   const item = $input.first() || { json: {}, binary: {} };
   const inputItem = item.json || {};
-  const outJson = Object.assign({}, inputItem, { s3_put_url: "", s3_get_url: "", presign_logs: logs });
+  const outJson = Object.assign({}, inputItem, { s3_put_url: "", s3_get_url: "", presignedUrl: "", presign_logs: logs });
   const binary = item.binary && item.binary.data ? { data: item.binary.data } : null;
 
   try {
@@ -207,6 +207,7 @@ async function main() {
     });
     outJson.s3_put_url = putUrl;
     outJson.s3_get_url = getUrl;
+    outJson.presignedUrl = getUrl;
     outJson.s3_bucket = bucket;
     outJson.s3_key = key;
     log(`Presign: ${bucket}/${key}`);

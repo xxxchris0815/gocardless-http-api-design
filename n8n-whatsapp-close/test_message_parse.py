@@ -510,9 +510,11 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("ffmpeg fehlt oder Konvertierung fehlgeschlagen", convert)
         self.assertIn("prepareMinioMp3Upload", js)
         self.assertIn("presignMinioPut", js)
-        self.assertIn('jsonFromNamed("Convert Voice to MP3")', js)
-        self.assertIn('jsonFromNamed("Prepare MinIO Upload")', js)
-        self.assertIn('jsonFromNamed("Upload MP3 MinIO")', js)
+        self.assertIn("presignedUrl", js)
+        self.assertIn("inputItem.presignedUrl", js)
+        self.assertNotIn('jsonFromNamed("Convert Voice to MP3")', js)
+        self.assertNotIn('jsonFromNamed("Prepare MinIO Upload")', js)
+        self.assertNotIn('jsonFromNamed("Upload MP3 MinIO")', js)
         self.assertIn("parseS3MediaUrl", js)
         self.assertIn("s3_access_key", js)
         self.assertNotIn("uploadMp3ToMinio", js)
@@ -543,14 +545,19 @@ class JsSmokeTests(unittest.TestCase):
         self.assertNotIn("close_api_key", convert_js)
         self.assertNotIn("s3_put_url", convert_js)
         self.assertIn("s3_put_url", presign_js)
+        self.assertIn("presignedUrl", presign_js)
         self.assertIn("X-Amz-Signature", presign_js)
         self.assertIn("activity/call", close_js)
-        self.assertIn('jsonFromNamed("Convert Voice to MP3")', close_js)
-        self.assertIn('jsonFromNamed("Prepare MinIO Upload")', close_js)
+        self.assertIn("inputItem.presignedUrl", close_js)
+        self.assertNotIn('jsonFromNamed("Convert Voice to MP3")', close_js)
         self.assertEqual(http["parameters"]["method"], "PUT")
         self.assertEqual(http["parameters"]["contentType"], "binaryData")
         self.assertEqual(http["parameters"]["inputDataFieldName"], "data")
         self.assertIn("s3_put_url", http["parameters"]["url"])
+        self.assertEqual(
+            http["parameters"]["options"]["response"]["response"]["outputPropertyName"],
+            "minio_put",
+        )
         self.assertEqual(
             data["connections"]["Voice MP3?"]["main"][0][0]["node"],
             "Prepare MinIO Upload",

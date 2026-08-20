@@ -45,7 +45,7 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 6. **Voice MP3?** — IF: `needs_minio_upload`
 7. **Prepare MinIO Upload** — presigned PUT/GET (nur Voice)
 8. **Upload MP3 MinIO** — HTTP Request PUT der MP3
-9. **Create Close WhatsApp Activity** — Lead suchen, Activity, Call mit `recording_url`
+9. **Create Close WhatsApp Activity** — Lead suchen, Activity, Call mit `recording_url` = `$json.presignedUrl`
 
 Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den Call-Player keine zweite n8n-URL.
 
@@ -58,9 +58,9 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 - Bilder, Video, GIF, Dokument, Sticker: öffentliche Evolution-`mediaUrl` (S3, mit `X-Amz-Signature`) als Markdown-Link in der WhatsApp-Activity. Nur wenn die URL fehlt: Evolution `getBase64FromMediaMessage` → Close Files
 - Voice:
   1. **Convert Voice to MP3**: OGA laden, ffmpeg → MP3, Binary `data`. Kein MinIO, kein Close. Extra ffmpeg-Versuche: OGG/Opus/WebM, `analyzeduration`/`probesize` für Pipes.
-  2. **Prepare MinIO Upload**: presigned PUT/GET
-  3. **Upload MP3 MinIO**: HTTP Request PUT
-  4. **Create Close WhatsApp Activity**: Lead finden, WhatsApp-Hinweis, Call mit `recording_url`
+  2. **Prepare MinIO Upload**: presigned PUT + `presignedUrl` (GET der MP3)
+  3. **Upload MP3 MinIO**: HTTP Request PUT (JSON bleibt, Antwort in `minio_put`)
+  4. **Create Close WhatsApp Activity**: Lead finden, WhatsApp-Hinweis, Call mit `recording_url` = `$input.first().json.presignedUrl`
 - Close-Files-Upload für Voice entfällt (HTTP 400 / Login-URLs). Close holt die MinIO-URL ohne Login und spielt nur MP3.
 - n8n-Container braucht `ffmpeg` (libmp3lame) und `NODE_FUNCTION_ALLOW_BUILTIN=child_process`.
 - MinIO-Keys in Config: dieselben wie Evolution (`S3_ACCESS_KEY` / `S3_SECRET_KEY`). Endpoint und Bucket kommen aus `mediaUrl`, wenn die Config-Felder leer sind.
@@ -86,7 +86,7 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 
 In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** Close-Key **und** MinIO-Keys eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
-Nach dem Import eine **neue** Sprachnachricht testen. Execution: Convert (`Convert: MP3 erzeugt`) → Presign → HTTP PUT 200 → Close (`Step 7: recording_url von MinIO`).
+Nach dem Import eine **neue** Sprachnachricht testen. Close muss `$json.presignedUrl` vom vorherigen Step haben (signierte MinIO-GET-URL der MP3).
 
 ```bash
 cd n8n-whatsapp-close
