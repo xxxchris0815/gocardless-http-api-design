@@ -10,15 +10,19 @@
  *  4. Dieser Code-Node: Run Once for All Items, JavaScript
  *
  * Medien: Evolution legt eine öffentliche S3-mediaUrl in data.message.mediaUrl.
- * Voice/Call: Close-Player akzeptiert nur MP3. OGA/OGG/Opus wird nach MP3
- * konvertiert (ffmpeg auf dem n8n-Host) und als recording_url gesetzt.
- * Andere Medien: S3-Link in der WhatsApp-Activity. Fallback ohne mediaUrl:
- * Evolution getBase64 → Close Files.
+ * Voice/Call: Close-Player akzeptiert nur MP3. Ablauf:
+ *  1. OGA von Evolution-S3 laden
+ *  2. ffmpeg → MP3
+ *  3. MP3 nach MinIO legen (dieselben Keys wie Evolution)
+ *  4. signierte GET-URL als Close recording_url
+ * Andere Medien: S3-Link in der WhatsApp-Activity.
  *
  * Config:
  *  close_api_key, create_task,
  *  excluded_phone_number, excluded_user_id, field_id_responsible_user,
- *  evolution_base_url, evolution_api_key, upload_media
+ *  evolution_base_url, evolution_api_key, upload_media,
+ *  s3_access_key, s3_secret_key (MinIO). s3_endpoint / s3_bucket optional
+ *  (sonst aus mediaUrl). s3_region default us-east-1.
  *  my_whatsapp_number nur optional, falls Evolution die Nummer nicht liefert
  */
 
@@ -240,6 +244,221 @@ function tryFfmpegToMp3(buffer) {
     }
   }
   return null;
+}
+
+function parseS3MediaUrl(url) {
+  const raw = String(url || "").trim();
+  if (!raw.startsWith("http")) return null;
+  try {
+    const u = new URL(raw.split("?")[0]);
+    const parts = u.pathname.split("/").filter(Boolean).map((p) => {
+      try {
+        return decodeURIComponent(p);
+      } catch (e) {
+        return p;
+      }
+    });
+    if (!parts.length) return { endpoint: `${u.protocol}//${u.host}`, bucket: "", key: "" };
+    return {
+      endpoint: `${u.protocol}//${u.host}`,
+      bucket: parts[0],
+      key: parts.slice(1).join("/"),
+    };
+  } catch (e) {
+    return null;
+  }
+}
+
+function mp3KeyFromSource(key, msgId) {
+  let raw = String(key || "").split("?")[0].replace(/^\//, "");
+  if (raw) {
+    if (/\.(oga|ogg|opus|m4a|aac|wav|mp4)$/i.test(raw)) return raw.replace(/\.[^.]+$/, ".mp3");
+    if (/\.mp3$/i.test(raw)) return raw;
+    return `${raw}.mp3`;
+  }
+  const id = String(msgId || "voice").replace(/[^\w.-]/g, "");
+  return `evolution-api/close-mp3/${Date.now()}_${id}.mp3`;
+}
+
+function bytesToHex(bytes) {
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let s = "";
+  for (let i = 0; i < arr.length; i++) s += arr[i].toString(16).padStart(2, "0");
+  return s;
+}
+
+function toUtf8Bytes(str) {
+  return new TextEncoder().encode(String(str));
+}
+
+function awsUriEncode(input, encodeSlash) {
+  const s = String(input);
+  let out = "";
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i];
+    if (
+      (ch >= "A" && ch <= "Z") ||
+      (ch >= "a" && ch <= "z") ||
+      (ch >= "0" && ch <= "9") ||
+      ch === "_" ||
+      ch === "-" ||
+      ch === "~" ||
+      ch === "."
+    ) {
+      out += ch;
+    } else if (ch === "/" && !encodeSlash) {
+      out += "/";
+    } else {
+      out += `%${ch.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`;
+    }
+  }
+  return out;
+}
+
+function amzTimestamps() {
+  const iso = new Date().toISOString();
+  const amzDate = iso.replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  return { amzDate, dateStamp: amzDate.slice(0, 8) };
+}
+
+async function sha256Hex(data) {
+  const bytes = Buffer.isBuffer(data) ? new Uint8Array(data) : data instanceof Uint8Array ? data : toUtf8Bytes(data);
+  if (globalThis.crypto && crypto.subtle) {
+    return bytesToHex(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)));
+  }
+  const c = require("crypto");
+  return c.createHash("sha256").update(Buffer.from(bytes)).digest("hex");
+}
+
+async function hmacSha256(keyBytes, data) {
+  const key = keyBytes instanceof Uint8Array ? keyBytes : new Uint8Array(keyBytes);
+  const payload = typeof data === "string" ? toUtf8Bytes(data) : data instanceof Uint8Array ? data : new Uint8Array(data);
+  if (globalThis.crypto && crypto.subtle) {
+    const cryptoKey = await crypto.subtle.importKey("raw", key, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+    return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, payload));
+  }
+  const c = require("crypto");
+  return new Uint8Array(c.createHmac("sha256", Buffer.from(key)).update(Buffer.from(payload)).digest());
+}
+
+async function awsSigningKey(secret, dateStamp, region, service) {
+  const kDate = await hmacSha256(toUtf8Bytes(`AWS4${secret}`), dateStamp);
+  const kRegion = await hmacSha256(kDate, region);
+  const kService = await hmacSha256(kRegion, service);
+  return hmacSha256(kService, "aws4_request");
+}
+
+function s3Host(endpoint) {
+  return new URL(endpoint).host;
+}
+
+function s3ObjectUrl(endpoint, bucket, key) {
+  const base = String(endpoint).replace(/\/+$/, "");
+  const path = `/${awsUriEncode(bucket, true)}/${awsUriEncode(key, false)}`;
+  return `${base}${path}`;
+}
+
+function s3CanonicalUri(bucket, key) {
+  return `/${awsUriEncode(bucket, true)}/${awsUriEncode(key, false)}`;
+}
+
+async function putMinioObject({ endpoint, bucket, key, body, accessKey, secretKey, region, contentType }) {
+  const { amzDate, dateStamp } = amzTimestamps();
+  const host = s3Host(endpoint);
+  const payloadHash = await sha256Hex(body);
+  const canonicalUri = s3CanonicalUri(bucket, key);
+  const headersLower = {
+    "content-type": contentType || "application/octet-stream",
+    host,
+    "x-amz-content-sha256": payloadHash,
+    "x-amz-date": amzDate,
+  };
+  const signedHeaders = Object.keys(headersLower).sort().join(";");
+  const canonicalHeaders = Object.keys(headersLower)
+    .sort()
+    .map((k) => `${k}:${headersLower[k]}\n`)
+    .join("");
+  const canonicalRequest = ["PUT", canonicalUri, "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const scope = `${dateStamp}/${region}/s3/aws4_request`;
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, await sha256Hex(canonicalRequest)].join("\n");
+  const signingKey = await awsSigningKey(secretKey, dateStamp, region, "s3");
+  const signature = bytesToHex(await hmacSha256(signingKey, stringToSign));
+  const auth = `AWS4-HMAC-SHA256 Credential=${accessKey}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const url = s3ObjectUrl(endpoint, bucket, key);
+  const headers = {
+    "Content-Type": headersLower["content-type"],
+    Host: host,
+    "X-Amz-Content-Sha256": payloadHash,
+    "X-Amz-Date": amzDate,
+    Authorization: auth,
+  };
+  if (typeof fetch === "function") {
+    const res = await fetch(url, { method: "PUT", headers, body });
+    const text = await res.text();
+    return { status: res.status, data: text };
+  }
+  return httpCall("PUT", url, { headers, body, json: false, timeout: 60000 });
+}
+
+async function presignMinioGet({ endpoint, bucket, key, accessKey, secretKey, region, expires }) {
+  const { amzDate, dateStamp } = amzTimestamps();
+  const host = s3Host(endpoint);
+  const canonicalUri = s3CanonicalUri(bucket, key);
+  const scope = `${dateStamp}/${region}/s3/aws4_request`;
+  const credential = `${accessKey}/${scope}`;
+  const query = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Credential": credential,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": String(expires || 604800),
+    "X-Amz-SignedHeaders": "host",
+  };
+  const canonicalQuery = Object.keys(query)
+    .sort()
+    .map((k) => `${awsUriEncode(k, true)}=${awsUriEncode(query[k], true)}`)
+    .join("&");
+  const canonicalRequest = ["GET", canonicalUri, canonicalQuery, `host:${host}\n`, "host", "UNSIGNED-PAYLOAD"].join("\n");
+  const stringToSign = ["AWS4-HMAC-SHA256", amzDate, scope, await sha256Hex(canonicalRequest)].join("\n");
+  const signingKey = await awsSigningKey(secretKey, dateStamp, region, "s3");
+  const signature = bytesToHex(await hmacSha256(signingKey, stringToSign));
+  return `${s3ObjectUrl(endpoint, bucket, key)}?${canonicalQuery}&X-Amz-Signature=${signature}`;
+}
+
+async function uploadMp3ToMinio({ mediaUrl, mp3, msgId, accessKey, secretKey, region, endpointCfg, bucketCfg }) {
+  const parsedS3 = parseS3MediaUrl(mediaUrl);
+  const endpoint = String(endpointCfg || (parsedS3 && parsedS3.endpoint) || "").replace(/\/+$/, "");
+  const bucket = String(bucketCfg || (parsedS3 && parsedS3.bucket) || "").trim();
+  if (!endpoint || !bucket) {
+    throw new Error("s3_endpoint / s3_bucket fehlen (oder mediaUrl ohne Bucket-Pfad)");
+  }
+  if (!accessKey || !secretKey) {
+    throw new Error("s3_access_key / s3_secret_key fehlen in Config (MinIO-Keys wie bei Evolution)");
+  }
+  const key = mp3KeyFromSource(parsedS3 && parsedS3.key, msgId);
+  const putRes = await putMinioObject({
+    endpoint,
+    bucket,
+    key,
+    body: mp3,
+    accessKey,
+    secretKey,
+    region: region || "us-east-1",
+    contentType: "audio/mpeg",
+  });
+  if (putRes.status !== 200 && putRes.status !== 204) {
+    const detail = typeof putRes.data === "string" ? putRes.data.slice(0, 180) : "";
+    throw new Error(`MinIO PUT HTTP ${putRes.status}${detail ? `: ${detail}` : ""}`);
+  }
+  const url = await presignMinioGet({
+    endpoint,
+    bucket,
+    key,
+    accessKey,
+    secretKey,
+    region: region || "us-east-1",
+    expires: 604800,
+  });
+  return { url, bucket, key };
 }
 
 function filenameForMedia(kind, mime, given) {
@@ -1090,6 +1309,11 @@ async function main() {
   const shouldCreateTask = pickBool("create_task", "WA_CREATE_TASK", true);
   const configLocalPhone = cleanPhone(pick("my_whatsapp_number", "MY_WHATSAPP_NUMBER", ""));
   const shouldUploadMedia = pickBool("upload_media", "WA_UPLOAD_MEDIA", true);
+  const s3AccessKey = String(pick("s3_access_key", "S3_ACCESS_KEY", "")).trim();
+  const s3SecretKey = String(pick("s3_secret_key", "S3_SECRET_KEY", "")).trim();
+  const s3Region = String(pick("s3_region", "S3_REGION", "us-east-1")).trim() || "us-east-1";
+  const s3EndpointCfg = String(pick("s3_endpoint", "S3_ENDPOINT", "")).trim();
+  const s3BucketCfg = String(pick("s3_bucket", "S3_BUCKET", "")).trim();
 
   let payloads = [];
   try {
@@ -1432,22 +1656,19 @@ async function main() {
             }
           }
           if (mp3) {
-            const uploaded = await uploadCloseFile({
-              authHeaders: closeHeaders,
-              filename: "voice.mp3",
-              contentType: "audio/mpeg",
-              buffer: mp3,
+            log(`Step 7a: MP3 erzeugt (${mp3.length} bytes)`);
+            const uploaded = await uploadMp3ToMinio({
+              mediaUrl: parsed.media_url || "",
+              mp3,
+              msgId: parsed.id,
+              accessKey: s3AccessKey,
+              secretKey: s3SecretKey,
+              region: s3Region,
+              endpointCfg: s3EndpointCfg,
+              bucketCfg: s3BucketCfg,
             });
-            attachments.push(closeFileAttachment(uploaded));
-            voiceRecordingUrl =
-              uploaded.public_url || (await resolvePublicRecordingUrl(uploaded.url, closeHeaders));
-            if (voiceRecordingUrl) {
-              log(`Step 7: MP3 recording_url (${mp3.length} bytes, ${voiceRecordingUrl.split("?")[0]})`);
-            } else {
-              mediaUploadError =
-                "MP3 erzeugt, aber Close-Files-URL ist nicht öffentlich. Call-Player braucht eine MP3-HTTPS-URL.";
-              log(`Step 7: ${mediaUploadError}`);
-            }
+            voiceRecordingUrl = uploaded.url;
+            log(`Step 7b: MP3 nach MinIO ${uploaded.bucket}/${uploaded.key}`);
           } else {
             mediaUploadError =
               "Close zeigt im Call-Player nur MP3, keine OGA/OGG/Opus. ffmpeg auf dem n8n-Host fehlt oder die Konvertierung ist fehlgeschlagen.";
@@ -1668,7 +1889,7 @@ async function main() {
     task_reason: taskReason,
     media_url: parsed.media_url || voiceRecordingUrl || undefined,
     media_type: parsed.type,
-    media_uploaded: Boolean(attachments.length),
+    media_uploaded: Boolean(attachments.length) || Boolean(isVoice && voiceRecordingUrl),
     media_linked: Boolean(parsed.media_url),
     media_upload_error: mediaUploadError || undefined,
     recording_url: isVoice ? voiceRecordingUrl || undefined : undefined,

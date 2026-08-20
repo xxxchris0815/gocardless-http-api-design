@@ -25,6 +25,11 @@ ASSIGNMENTS = [
     ("evolution_base_url", ""),
     ("evolution_api_key", ""),
     ("upload_media", "true"),
+    ("s3_endpoint", ""),
+    ("s3_bucket", ""),
+    ("s3_access_key", ""),
+    ("s3_secret_key", ""),
+    ("s3_region", "us-east-1"),
 ]
 
 UNWRAP_JS = """function collect(raw, depth) {
@@ -160,7 +165,7 @@ workflow = {
             "type": "n8n-nodes-base.set",
             "typeVersion": 2,
             "position": [920, 300],
-            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). close_api_key = Klartext-Key (api_…). Die lokale WhatsApp-Nummer kommt von Evolution fetchInstances; my_whatsapp_number nur als Fallback.",
+            "notes": "Nur zusätzliche Felder setzen, Webhook-Body behalten (keepOnlySet=false). close_api_key = Klartext-Key (api_…). s3_access_key / s3_secret_key = MinIO wie Evolution. Endpoint/Bucket können aus mediaUrl kommen.",
         },
         {
             "parameters": {
@@ -173,7 +178,7 @@ workflow = {
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [1160, 300],
-            "notes": "Lead per Telefon suchen, Activity anlegen, bei Incoming Task 'WhatsApp beantworten'. Voice: OGA nach MP3 (ffmpeg), dann Close recording_url.",
+            "notes": "Lead per Telefon suchen, Activity anlegen. Voice: OGA→MP3 (ffmpeg), MP3 nach MinIO, signierte URL als Close recording_url.",
         },
     ],
     "connections": {

@@ -20,6 +20,8 @@ from message_parse import (
     public_media_url,
     is_public_recording_url,
     needs_mp3_for_close_recording,
+    parse_s3_media_url,
+    mp3_key_from_source,
 )
 
 
@@ -428,6 +430,28 @@ class CloseMp3Tests(unittest.TestCase):
         self.assertFalse(needs_mp3_for_close_recording("https://cdn.example.com/rec.mp3"))
 
 
+class MinioUrlTests(unittest.TestCase):
+    def test_parse_path_style_media_url(self):
+        url = (
+            "https://s3.example.com/evolution/evolution-api/abc-id/"
+            "170424369434729%40lid/audioMessage/123_MSG.oga?X-Amz-Signature=abc"
+        )
+        parsed = parse_s3_media_url(url)
+        self.assertEqual(parsed["endpoint"], "https://s3.example.com")
+        self.assertEqual(parsed["bucket"], "evolution")
+        self.assertEqual(
+            parsed["key"],
+            "evolution-api/abc-id/170424369434729@lid/audioMessage/123_MSG.oga",
+        )
+        self.assertEqual(
+            mp3_key_from_source(parsed["key"]),
+            "evolution-api/abc-id/170424369434729@lid/audioMessage/123_MSG.mp3",
+        )
+
+    def test_mp3_key_fallback(self):
+        self.assertEqual(mp3_key_from_source("", "wamid.1"), "evolution-api/close-mp3/wamid.1.mp3")
+
+
 class JsSmokeTests(unittest.TestCase):
     def test_n8n_script_is_evolution_only(self):
         js = Path(__file__).with_name("whatsapp_to_close.js").read_text(encoding="utf-8")
@@ -475,6 +499,9 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("needsMp3ForCloseRecording", js)
         self.assertIn("audio/mpeg", js)
         self.assertIn("Close zeigt im Call-Player nur MP3", js)
+        self.assertIn("uploadMp3ToMinio", js)
+        self.assertIn("parseS3MediaUrl", js)
+        self.assertIn("s3_access_key", js)
 
     def test_generated_workflow_has_single_post_webhook(self):
         data = json.loads(Path(__file__).with_name("WhatsApp_Close_Activity.json").read_text(encoding="utf-8"))
@@ -488,6 +515,7 @@ class JsSmokeTests(unittest.TestCase):
         self.assertIn("resolvePublicRecordingUrl", blob)
         self.assertIn("firstPublicMediaUrl", blob)
         self.assertIn("tryFfmpegToMp3", blob)
+        self.assertIn("uploadMp3ToMinio", blob)
 
 
 if __name__ == "__main__":

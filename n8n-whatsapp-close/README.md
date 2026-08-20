@@ -53,11 +53,13 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 - Outgoing: Close-User aus `/me/`
 - Bilder, Video, GIF, Dokument, Sticker: öffentliche Evolution-`mediaUrl` (S3, mit `X-Amz-Signature`) als Markdown-Link in der WhatsApp-Activity. Nur wenn die URL fehlt: Evolution `getBase64FromMediaMessage` → Close Files
 - Voice:
-  1. WhatsApp-Activity als **Hinweis** mit S3-Abspiel-Link (Original `.oga`, im Browser abspielbar)
-  2. Audio nach **MP3** konvertieren (`ffmpeg` auf dem n8n-Host), als `voice.mp3` / `audio/mpeg` zu Close Files, `recording_url` = öffentliche MP3-URL
-  3. Task „WhatsApp Voice beantworten“ ohne Duplikat
-- Close holt `recording_url` **sofort und ohne Login** und zeigt im Call-Player **nur MP3**. OGA/OGG/Opus von WhatsApp wird ignoriert (leerer Player).
-- n8n-Container braucht `ffmpeg` (libmp3lame). Ohne ffmpeg steht der Grund in `media_upload_error`; der Hinweis-Link auf die S3-OGA bleibt.
+  1. WhatsApp-Activity als **Hinweis** mit S3-Abspiel-Link (Original `.oga`)
+  2. **ffmpeg** wandelt OGA nach MP3
+  3. MP3 wird nach **MinIO** gelegt (neben die OGA, `.mp3`), signierte GET-URL (7 Tage)
+  4. Close-Call mit `recording_url` = diese MP3-URL
+- Close-Files-Upload für Voice entfällt (HTTP 400 / Login-URLs). Close holt die MinIO-URL ohne Login und spielt nur MP3.
+- n8n-Container braucht `ffmpeg` (libmp3lame) und `NODE_FUNCTION_ALLOW_BUILTIN=child_process`.
+- MinIO-Keys in Config: dieselben wie Evolution (`S3_ACCESS_KEY` / `S3_SECRET_KEY`). Endpoint und Bucket kommen aus `mediaUrl`, wenn die Config-Felder leer sind.
 - WhatsApp-CDN-URLs werden nicht als Markdown verlinkt
 - Duplikate: gleiche `wamid` → skip (vor dem Media-Download)
 
@@ -73,10 +75,14 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
 | `evolution_base_url` | Evolution-Server, z. B. `https://evo.example.com` (ohne Slash am Ende) |
 | `evolution_api_key` | Evolution-`apikey`. Fallback: `apikey` aus dem originalen Webhook |
 | `upload_media` | `true`/`false`, Default `true`. Nur Fallback, wenn im Webhook **keine** öffentliche `mediaUrl` steckt. |
+| `s3_access_key` / `s3_secret_key` | MinIO-Zugang, **dieselben Keys wie Evolution**. Nicht committen. |
+| `s3_endpoint` | Optional, z. B. `https://s3.example.com`. Leer = Host aus `mediaUrl`. |
+| `s3_bucket` | Optional. Leer = erster Pfadteil der `mediaUrl` (`evolution`). |
+| `s3_region` | Default `us-east-1` (wie Evolution/MinIO). |
 
-In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** den Close-Klartext-Key eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
+In n8n: **Workflows → Import from File** (bestehenden Workflow ersetzen) und den Workflow **aktivieren**. In **Config** Close-Key **und** MinIO-Keys eintragen. Die Config-Node muss den Webhook-Body behalten (`keepOnlySet` aus).
 
-Nach dem Import eine **neue** Sprachnachricht testen. In der n8n-Ausführung: `recording_format: mp3` und `recording_url` mit `X-Amz-Signature`. Fehlt ffmpeg, steht das in `media_upload_error` — dann `ffmpeg` im n8n-Image installieren (`apk add ffmpeg` bzw. `apt-get install ffmpeg`) und dem Code-Node `child_process` erlauben.
+Nach dem Import eine **neue** Sprachnachricht testen. Logs: `Step 7a: MP3 erzeugt` und `Step 7b: MP3 nach MinIO`. `recording_url` muss auf eure MinIO-Domain zeigen, Datei `.mp3`, Query mit `X-Amz-Signature`.
 
 ```bash
 cd n8n-whatsapp-close

@@ -6,7 +6,7 @@ import re
 import json
 from datetime import datetime, timezone
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 
 RELEVANT_EVENTS = frozenset({"send.message", "messages.upsert"})
@@ -183,6 +183,33 @@ def needs_mp3_for_close_recording(url: Optional[str] = None, mime: str = "") -> 
     if clean.startswith("audio/") or clean in {"application/ogg", "video/mp4", "audio/mp4"}:
         return True
     return any(path.endswith(ext) for ext in (".oga", ".ogg", ".opus", ".m4a", ".wav", ".aac"))
+
+
+def parse_s3_media_url(url: Optional[str]) -> Optional[dict]:
+    raw = str(url or "").strip().split("?", 1)[0]
+    if not raw.startswith("http"):
+        return None
+    parsed = urlparse(raw)
+    parts = [unquote(p) for p in parsed.path.split("/") if p]
+    if not parts:
+        return {"endpoint": f"{parsed.scheme}://{parsed.netloc}", "bucket": "", "key": ""}
+    return {
+        "endpoint": f"{parsed.scheme}://{parsed.netloc}",
+        "bucket": parts[0],
+        "key": "/".join(parts[1:]),
+    }
+
+
+def mp3_key_from_source(key: Optional[str], msg_id: str = "") -> str:
+    raw = str(key or "").split("?", 1)[0].lstrip("/")
+    if raw:
+        if re.search(r"\.(oga|ogg|opus|m4a|aac|wav|mp4)$", raw, re.I):
+            return re.sub(r"\.[^.]+$", ".mp3", raw)
+        if raw.lower().endswith(".mp3"):
+            return raw
+        return f"{raw}.mp3"
+    safe = re.sub(r"[^\w.-]", "", str(msg_id or "voice"))
+    return f"evolution-api/close-mp3/{safe}.mp3"
 
 
 def needs_media_upload(kind: str) -> bool:
