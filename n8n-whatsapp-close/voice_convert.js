@@ -69,6 +69,30 @@ function publicUrl(url) {
   return raw;
 }
 
+function mp3ObjectKey(mediaUrl, msgId) {
+  const raw = String(mediaUrl || "").split("?")[0];
+  try {
+    const u = new URL(raw);
+    const parts = u.pathname.split("/").filter(Boolean).map((p) => {
+      try {
+        return decodeURIComponent(p);
+      } catch (e) {
+        return p;
+      }
+    });
+    const key = parts.slice(1).join("/");
+    if (key) {
+      if (/\.(oga|ogg|opus|m4a|aac|wav|mp4)$/i.test(key)) return key.replace(/\.[^.]+$/, ".mp3");
+      if (/\.mp3$/i.test(key)) return key;
+      return `${key}.mp3`;
+    }
+  } catch (e) {
+    /* fall through */
+  }
+  const id = String(msgId || "voice").replace(/[^\w.-]/g, "");
+  return `evolution-api/close-mp3/${Date.now()}_${id}.mp3`;
+}
+
 function findVoice(item) {
   const payloads = collect(item);
   for (const payload of payloads) {
@@ -227,6 +251,8 @@ async function main() {
     convert_logs: logs,
     voice_media_url: "",
     voice_msg_id: "",
+    s3_key: "",
+    s3_bucket: "",
   });
 
   const voice = findVoice(inputItem);
@@ -272,7 +298,10 @@ async function main() {
     outJson.needs_minio_upload = true;
     outJson.voice_media_url = voice.mediaUrl;
     outJson.voice_msg_id = voice.msgId;
+    outJson.s3_key = mp3ObjectKey(voice.mediaUrl, voice.msgId);
+    outJson.s3_bucket = "evolution";
     outJson.convert_logs = logs.slice();
+    log(`Convert: s3_key ${outJson.s3_key}`);
     return [{ json: outJson, binary: { data: binaryData } }];
   } catch (e) {
     outJson.media_upload_error = String(e.message || e);

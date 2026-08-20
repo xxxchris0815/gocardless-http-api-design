@@ -91,15 +91,25 @@ Nach dem Import eine **neue** Sprachnachricht testen. Close muss eine `recording
 
 ### Community-MinIO-Node
 
-Der Community-Node gibt oft nur `{ "url": "http://minio:9000/…" }` oder `{ "url": "http://s3.…:9000/…" }` zurück. Close liest `$json.url` und schreibt auf `https://s3.…` um (Host aus der Evolution-`mediaUrl`, Port 9000 weg).
+Der Community-Node gibt oft nur `{ "url": "http://…" }` zurück. Close liest `$json.url`.
 
-Damit die Signatur nach dem Umschreiben noch gilt, müssen die **n8n-MinIO-Credentials** schon gegen den öffentlichen Host signieren:
+**Object Name** muss der echte MinIO-Pfad sein, nicht die n8n-Binary-ID (`e8a1…-1`). Sonst PUT/GET gegen `/evolution/<hash>-1` → `NoSuchKey`.
 
-- Endpoint: `s3.orgasmic.live` (ohne `http://minio` und ohne `:9000`)
+Im MinIO-Node:
+
+- Bucket: `evolution` oder `{{ $json.s3_bucket }}`
+- Object Name: `{{ $json.s3_key }}`  
+  Beispiel: `evolution-api/<instance-id>/…/audioMessage/<id>.mp3`
+- Binary Property: `data`
+- Content-Type: `audio/mpeg`
+
+`$json.s3_key` kommt vom Convert-Node (gleiche Datei wie die Evolution-`.oga`, nur `.mp3`).
+
+Credentials:
+
+- Endpoint: `s3.orgasmic.live`
 - Port: `443`
 - SSL / useSSL: an
-
-Sonst PUT intern gegen `http://minio:9000` und Close-GET über `https://s3.…` — Host-Header in der SigV4-Signatur passt dann nicht (MinIO 403). Alternative: den mitgelieferten Node **Prepare MinIO Upload** nutzen, der PUT intern und GET öffentlich getrennt presigned.
 
 ```bash
 cd n8n-whatsapp-close
