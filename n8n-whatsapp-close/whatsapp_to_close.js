@@ -1637,6 +1637,8 @@ async function main() {
         lead_id: leadId,
         action: "skipped_duplicate",
         duplicate_activity_id: callDup.id,
+        activity_id: callDup.id,
+        call_activity_id: callDup.id,
         activity_type: "call",
       });
     }
@@ -1816,11 +1818,12 @@ async function main() {
         details: createRes.data,
         http_status: createRes.status,
         hint_activity_id: hintActivity.id,
+        call_activity_id: "",
       });
     }
     newActivity = createRes.data || {};
     activityType = "call";
-    log("Step 8b: Call Activity Created");
+    log(`Step 8b: Call Activity Created ${newActivity.id || ""}`);
   } else {
     const createRes = await createWhatsAppActivity(parsed.text);
     if (createRes.status < 200 || createRes.status >= 300) {
@@ -1870,6 +1873,7 @@ async function main() {
     success: true,
     lead_id: leadId,
     activity_id: newActivity.id,
+    call_activity_id: isVoice ? newActivity.id : undefined,
     activity_type: activityType,
     hint_activity_id: isVoice ? hintActivity.id : undefined,
     task_created: taskCreated,

@@ -45,7 +45,7 @@ Das n8n-Webhook-Item wird mit ausgepackt — also genau diese Form:
 6. **Voice MP3?** — IF: `needs_minio_upload`
 7. **Prepare MinIO Upload** — presigned PUT/GET (nur Voice)
 8. **Upload MP3 MinIO** — HTTP Request PUT der MP3
-9. **Create Close WhatsApp Activity** — Lead suchen, Activity, Call mit `recording_url` = `$json.presignedUrl` oder `$json.url` (https, ohne `:9000`)
+9. **Create Close WhatsApp Activity** — Lead suchen, Activity, Call. Output: `call_activity_id` (Close Call), `hint_activity_id` (WhatsApp-Hinweis), `activity_id` (Call bei Voice, sonst WhatsApp)
 
 Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den Call-Player keine zweite n8n-URL.
 
@@ -60,7 +60,7 @@ Nur **ein** Webhook: Evolution → POST `whatsapp-close`. Close braucht für den
   1. **Convert Voice to MP3**: Jede `audioMessage` (PTT **und** Audio-Datei, `ptt: false`) laden, ffmpeg → MPEG-1-MP3 (**44.1 kHz, 64 kbit CBR, mono**). Gruppen (`@g.us`) konvertiert der Node, Close legt sie trotzdem nicht an. 16 kHz / 32 kbit ist MPEG-2.5; Close zeigt dann oft „Unable to play audio file“. Extra ffmpeg-Versuche: OGG/Opus/WebM.
   2. **Prepare MinIO Upload**: presigned PUT + `presignedUrl` (GET der MP3)
   3. **Upload MP3 MinIO**: HTTP Request PUT (JSON bleibt, Antwort in `minio_put`)
-  4. **Create Close WhatsApp Activity**: Lead finden, WhatsApp-Hinweis, Call mit `recording_url` aus `presignedUrl` oder Community-MinIO-Feld `url` (immer `https://`, Port `9000` entfernt)
+  4. **Create Close WhatsApp Activity**: Lead finden, WhatsApp-Hinweis, Call. JSON enthält `call_activity_id` für den nächsten n8n-Step (`{{ $json.call_activity_id }}`). Bei Duplikat dieselbe ID.
 - Close-Files-Upload für Voice entfällt (HTTP 400 / Login-URLs). Close holt die MinIO-URL ohne Login und spielt nur MP3.
 - n8n-Container braucht `ffmpeg` (libmp3lame) und `NODE_FUNCTION_ALLOW_BUILTIN=child_process`.
 - Close-Player ist HTML5: Datei muss **MPEG-1 Layer III** sein (44.1 oder 48 kHz). MinIO muss `Content-Type: audio/mpeg` liefern. CORS für `https://app.close.com` (GET/HEAD). Wenn die URL im Browser-Tab spielt, in Close aber nicht: CORS. Wenn sie auch im Tab nicht spielt: Format oder Content-Type.
