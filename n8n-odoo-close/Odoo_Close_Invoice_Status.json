@@ -1,0 +1,171 @@
+{
+  "name": "Odoo Rechnung → Close Opportunity",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "odoo-invoice-close",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "d40b66f4-8cc3-4a12-9e70-1a2b3c4d5e11",
+      "name": "Odoo Invoice Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "webhookId": "odoo-invoice-close",
+      "notes": "Odoo Automation/Webhook auf account.move hierhin zeigen. Antwort erfolgt sofort."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "not-draft-invoice",
+              "leftValue": "={{ $json.body.display_name || $json.display_name || '' }}",
+              "rightValue": "Draft Invoice",
+              "operator": {
+                "type": "string",
+                "operation": "notContains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e51c77a5-9dd4-4b23-8f81-2b3c4d5e6f22",
+      "name": "Not Draft Invoice",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.2,
+      "position": [
+        460,
+        300
+      ],
+      "notes": "Entwürfe (display_name enthält 'Draft Invoice') werden nicht nach Close geschickt."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "close-cfg-0",
+              "name": "close_api_key",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "close-cfg-1",
+              "name": "field_id_residual",
+              "value": "cf_q6Ho0eoB1QNrxnVRpZMg4AVQGSSYVyoijjHGlEG9Ipf",
+              "type": "string"
+            },
+            {
+              "id": "close-cfg-2",
+              "name": "status_id_partial",
+              "value": "stat_UYfeivz3DkREtA8Zg3gXCDxdYO97Z99rlln5uDIHQkM",
+              "type": "string"
+            },
+            {
+              "id": "close-cfg-3",
+              "name": "status_id_paid",
+              "value": "stat_tbowGdRIqnF0bDsZeNmcEyiefUkdWfp1cap4PVD9Ive",
+              "type": "string"
+            },
+            {
+              "id": "close-cfg-4",
+              "name": "field_id_deposit_date",
+              "value": "cf_OxCaftVBRHVJM1vIIVrVqRTtdjoQJ3f8yGnOUU0YpZY",
+              "type": "string"
+            },
+            {
+              "id": "close-cfg-5",
+              "name": "field_id_full_pay_date",
+              "value": "cf_JH04OF409wsXMK0ATa20Wn9aPW7w8pdAsQHFMSamnMU",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "f62d88b6-0ee5-4c34-9a92-3c4d5e6f7a33",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        720,
+        300
+      ],
+      "notes": "close_api_key = Klartext-Key (api_…), nicht der Hash aus der Close-UI (oder CLOSE_API_KEY als n8n-Environment). Field/Status-IDs stammen aus Zapier."
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "/**\n * Odoo account.move Webhook → Close Opportunity Status (n8n Code-Node, JavaScript)\n *\n * Filter davor: display_name does not contain \"Draft Invoice\".\n *\n * n8n-Setup:\n *  1. Webhook-Node (POST), Response: Immediately\n *  2. Filter: display_name enthält nicht \"Draft Invoice\"\n *  3. Set-Node mit Config, \"Include Other Input Fields\" = an\n *  4. Dieser Code-Node: Mode = \"Run Once for All Items\", Language = JavaScript\n *\n * Config:\n *  close_api_key, field_id_residual, status_id_partial, status_id_paid,\n *  field_id_deposit_date, field_id_full_pay_date\n */\n\nconst PAID_STATES = [\"paid\", \"in_payment\"];\nconst RESIDUAL_PAID_THRESHOLD = 0.01;\n\nconst httpHelper = (() => {\n  if (this && this.helpers && typeof this.helpers.httpRequest === \"function\") {\n    return this.helpers.httpRequest.bind(this.helpers);\n  }\n  try {\n    if (typeof $helpers !== \"undefined\" && typeof $helpers.httpRequest === \"function\") {\n      return $helpers.httpRequest.bind($helpers);\n    }\n  } catch (e) {\n    /* ignore */\n  }\n  return null;\n})();\n\nconst inputItem = $input.first().json || {};\nconst logs = [];\n\nfunction log(msg) {\n  logs.push(String(msg));\n  console.log(msg);\n}\n\nfunction envGet(key) {\n  try {\n    if (typeof $env !== \"undefined\" && $env[key]) return String($env[key]);\n  } catch (e) {\n    /* ignore */\n  }\n  return \"\";\n}\n\nfunction pick(key, envKey, fallback = \"\") {\n  const fromItem = inputItem[key];\n  if (fromItem !== undefined && fromItem !== null && fromItem !== \"\") {\n    return fromItem;\n  }\n  const fromEnv = envGet(envKey);\n  if (fromEnv) return fromEnv;\n  return fallback;\n}\n\nfunction stripCustomPrefix(fieldId) {\n  let fid = String(fieldId || \"\").trim();\n  if (fid.startsWith(\"custom.\")) fid = fid.slice(\"custom.\".length);\n  return fid;\n}\n\nfunction closeCustomKey(fieldId) {\n  const fid = stripCustomPrefix(fieldId);\n  return fid ? `custom.${fid}` : \"\";\n}\n\nfunction isDraftInvoice(displayName) {\n  return String(displayName || \"\").toLowerCase().includes(\"draft invoice\");\n}\n\nfunction isFullyPaid(paymentState, amountResidual) {\n  const state = String(paymentState || \"\").toLowerCase().trim();\n  return PAID_STATES.includes(state) || amountResidual <= RESIDUAL_PAID_THRESHOLD;\n}\n\nfunction readCustomField(opportunity, fieldId) {\n  const fid = stripCustomPrefix(fieldId);\n  const nested = opportunity && opportunity.custom ? opportunity.custom[fid] : undefined;\n  if (nested !== undefined && nested !== null && nested !== \"\") return nested;\n  const flat = opportunity ? opportunity[`custom.${fid}`] : undefined;\n  if (flat !== undefined && flat !== null && flat !== \"\") return flat;\n  return null;\n}\n\nfunction decideClosePayload({\n  paymentState,\n  amountResidual,\n  currentDepositDate,\n  fieldIdResidual,\n  statusIdPaid,\n  statusIdPartial,\n  fieldIdDeposit,\n  fieldIdFullPay,\n  today,\n}) {\n  const payload = {};\n  const residualKey = closeCustomKey(fieldIdResidual);\n  if (residualKey) payload[residualKey] = amountResidual;\n\n  const state = String(paymentState || \"\").toLowerCase().trim();\n  const depositKey = closeCustomKey(fieldIdDeposit);\n  const fullKey = closeCustomKey(fieldIdFullPay);\n\n  if (isFullyPaid(state, amountResidual)) {\n    if (statusIdPaid) payload.status_id = statusIdPaid;\n    if (fullKey) payload[fullKey] = today;\n    if (depositKey && !currentDepositDate) payload[depositKey] = today;\n  } else if (state === \"partial\") {\n    if (statusIdPartial) payload.status_id = statusIdPartial;\n    if (depositKey && !currentDepositDate) payload[depositKey] = today;\n  }\n  return payload;\n}\n\nfunction extractInvoice(item) {\n  const parsed = [];\n  if (item.raw_json) {\n    parsed.push(typeof item.raw_json === \"string\" ? JSON.parse(item.raw_json) : item.raw_json);\n  }\n  if (item.body !== undefined) {\n    parsed.push(typeof item.body === \"string\" ? JSON.parse(item.body) : item.body);\n  }\n  parsed.push(item);\n  for (const candidate of parsed) {\n    if (\n      candidate &&\n      typeof candidate === \"object\" &&\n      (candidate.x_studio_close_opp_id ||\n        candidate.payment_state ||\n        candidate._model === \"account.move\")\n    ) {\n      return candidate;\n    }\n  }\n  return parsed[0] || item;\n}\n\nfunction todayIso() {\n  try {\n    if (typeof $now !== \"undefined\") {\n      if (typeof $now.toISODate === \"function\") return $now.toISODate();\n      if (typeof $now.toFormat === \"function\") return $now.toFormat(\"yyyy-MM-dd\");\n    }\n  } catch (e) {\n    /* ignore */\n  }\n  return new Date().toISOString().slice(0, 10);\n}\n\nfunction closeAuthHeader(apiKey) {\n  const token = Buffer.from(`${apiKey}:`, \"utf8\").toString(\"base64\");\n  return `Basic ${token}`;\n}\n\nfunction closeKeyLooksHashed(apiKey) {\n  const key = String(apiKey || \"\").trim();\n  if (!key) return false;\n  if (key.includes(\"*\")) return true;\n  if (/^[0-9a-f]{32,64}$/i.test(key)) return true;\n  if (/^\\$2[aby]\\$/.test(key)) return true;\n  return false;\n}\n\nconst CLOSE_KEY_HINT =\n  \"In Close: Settings → Developer → API Keys. Den Klartext-Key verwenden (beginnt mit api_), nicht den gehashten Key/Fingerprint aus der Liste.\";\n\nasync function httpJson(method, url, { headers = {}, body } = {}) {\n  const options = {\n    method,\n    url,\n    headers,\n    json: true,\n    ignoreHttpStatusErrors: true,\n    returnFullResponse: true,\n    timeout: 20000,\n  };\n  if (body !== undefined) options.body = body;\n\n  if (httpHelper) {\n    const result = await httpHelper(options);\n    if (result && typeof result === \"object\" && \"statusCode\" in result) {\n      return { status: result.statusCode, data: result.body };\n    }\n    return { status: 200, data: result };\n  }\n\n  if (typeof fetch === \"function\") {\n    const res = await fetch(url, {\n      method,\n      headers,\n      body: body !== undefined ? JSON.stringify(body) : undefined,\n    });\n    let data = null;\n    try {\n      data = await res.json();\n    } catch (e) {\n      data = null;\n    }\n    return { status: res.status, data };\n  }\n\n  throw new Error(\"Kein HTTP-Helper in diesem Code-Node (this.helpers.httpRequest oder fetch).\");\n}\n\nfunction result(status, extra) {\n  return [{ json: { status, logs, ...extra } }];\n}\n\nasync function main() {\n  const closeApiKey = String(pick(\"close_api_key\", \"CLOSE_API_KEY\", \"\")).trim();\n  const fieldIdResidual = String(pick(\"field_id_residual\", \"CLOSE_FIELD_RESIDUAL\", \"\")).trim();\n  const statusIdPartial = String(pick(\"status_id_partial\", \"CLOSE_STATUS_PARTIAL\", \"\")).trim();\n  const statusIdPaid = String(pick(\"status_id_paid\", \"CLOSE_STATUS_PAID\", \"\")).trim();\n  const fieldIdDeposit = String(\n    pick(\n      \"field_id_deposit_date\",\n      \"CLOSE_FIELD_DEPOSIT_DATE\",\n      \"cf_OxCaftVBRHVJM1vIIVrVqRTtdjoQJ3f8yGnOUU0YpZY\"\n    )\n  ).trim();\n  const fieldIdFullPay = String(\n    pick(\n      \"field_id_full_pay_date\",\n      \"CLOSE_FIELD_FULL_PAY_DATE\",\n      \"cf_JH04OF409wsXMK0ATa20Wn9aPW7w8pdAsQHFMSamnMU\"\n    )\n  ).trim();\n\n  if (!closeApiKey) {\n    return result(\"error\", { msg: \"API Key fehlt\" });\n  }\n  if (closeKeyLooksHashed(closeApiKey)) {\n    return result(\"error\", { msg: `close_api_key sieht gehasht/maskiert aus. ${CLOSE_KEY_HINT}` });\n  }\n\n  let invoice;\n  try {\n    invoice = extractInvoice(inputItem);\n  } catch (e) {\n    return result(\"error\", { msg: \"JSON Invalid\" });\n  }\n\n  const displayName = invoice.display_name || \"\";\n  if (isDraftInvoice(displayName)) {\n    log(`⏭️ Draft Invoice übersprungen: ${displayName}`);\n    return result(\"skipped\", { reason: \"Draft Invoice\", display_name: displayName });\n  }\n\n  const oppId = invoice.x_studio_close_opp_id;\n  const paymentState = String(invoice.payment_state || \"\").toLowerCase();\n  let amountResidual = 0.0;\n  try {\n    amountResidual = parseFloat(invoice.amount_residual);\n    if (!Number.isFinite(amountResidual)) amountResidual = 0.0;\n  } catch (e) {\n    amountResidual = 0.0;\n  }\n\n  if (!oppId) {\n    return result(\"skipped\", { reason: \"No Opp ID\", display_name: displayName });\n  }\n\n  const headers = {\n    Authorization: closeAuthHeader(closeApiKey),\n    \"Content-Type\": \"application/json\",\n    Accept: \"application/json\",\n  };\n  const url = `https://api.close.com/api/v1/opportunity/${oppId}/`;\n\n  log(`🚀 Close Opportunity ${oppId} | ${displayName} | ${paymentState} | residual=${amountResidual}`);\n\n  let currentDepositDate = null;\n  try {\n    const getRes = await httpJson(\"GET\", url, { headers });\n    if (getRes.status === 200 && getRes.data) {\n      currentDepositDate = readCustomField(getRes.data, fieldIdDeposit);\n      log(`   Anzahlungsdatum bisher: ${currentDepositDate || \"(leer)\"}`);\n    } else if (getRes.status === 401 || getRes.status === 403) {\n      return result(\"error\", {\n        msg: `Close API-Key ungültig (HTTP ${getRes.status}). ${CLOSE_KEY_HINT}`,\n        opp_id: oppId,\n        http_status: getRes.status,\n      });\n    } else {\n      log(`GET Error: ${JSON.stringify(getRes.data)}`);\n    }\n  } catch (e) {\n    log(`GET Exception: ${e.message || e}`);\n  }\n\n  const payload = decideClosePayload({\n    paymentState,\n    amountResidual,\n    currentDepositDate,\n    fieldIdResidual,\n    statusIdPaid,\n    statusIdPartial,\n    fieldIdDeposit,\n    fieldIdFullPay,\n    today: todayIso(),\n  });\n\n  const depositKey = closeCustomKey(fieldIdDeposit);\n\n  try {\n    const putRes = await httpJson(\"PUT\", url, { headers, body: payload });\n    if (putRes.status === 401 || putRes.status === 403) {\n      return result(\"error\", {\n        msg: `Close API-Key ungültig (HTTP ${putRes.status}). ${CLOSE_KEY_HINT}`,\n        opp_id: oppId,\n        http_status: putRes.status,\n      });\n    }\n    if (putRes.status !== 200) {\n      return result(\"error\", {\n        msg: putRes.data,\n        opp_id: oppId,\n        payload,\n        http_status: putRes.status,\n      });\n    }\n    return result(\"success\", {\n      opp_id: oppId,\n      display_name: displayName,\n      payment_state: paymentState,\n      amount_residual: amountResidual,\n      read_deposit_before: currentDepositDate,\n      updated_deposit: Boolean(depositKey && Object.prototype.hasOwnProperty.call(payload, depositKey)),\n      payload,\n    });\n  } catch (e) {\n    return result(\"error\", { msg: String(e.message || e), opp_id: oppId });\n  }\n}\n\nreturn await main();\n"
+      },
+      "id": "a73e99c7-1ff6-4d45-8b03-4d5e6f7a8b44",
+      "name": "Update Close Opportunity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        980,
+        300
+      ],
+      "notes": "paid/in_payment → Status paid + Vollzahlungsdatum; partial → Status partial. Anzahlungsdatum nur wenn leer."
+    }
+  ],
+  "connections": {
+    "Odoo Invoice Webhook": {
+      "main": [
+        [
+          {
+            "node": "Not Draft Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Not Draft Invoice": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Update Close Opportunity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
